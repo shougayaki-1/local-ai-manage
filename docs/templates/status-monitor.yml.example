@@ -1,0 +1,32 @@
+# Install alongside the reviewed engine/status-monitor.mjs in the status repository.
+# This template is inactive outside .github/workflows; no existing cron is changed.
+name: Codex Worker heartbeat monitor
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '7,17,27,37,47,57 * * * *'
+permissions:
+  contents: read
+  issues: read
+concurrency:
+  group: codex-worker-heartbeat-monitor
+  cancel-in-progress: false
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Inspect fixed status comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS_ISSUE: ${{ vars.CODEX_STATUS_ISSUE }}
+          STATUS_COMMENT: ${{ vars.CODEX_STATUS_COMMENT }}
+        run: node engine/status-monitor.mjs

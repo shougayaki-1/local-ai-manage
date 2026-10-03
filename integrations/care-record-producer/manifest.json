@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "id": "care-record-producer-v1",
+  "capturedAt": "2026-10-04",
+  "patchSha256": "25cccce506708cea06cf7a24116c4d2598e506554c2cf4c2c9b11f6075612797",
+  "files": [
+    {
+      "path": "scripts/codex/continuous-worker.mjs",
+      "before": "73a95a2e9de4b9c4f96aebc12d3aaec118d8e15e28519bf6de6f215cc5a50357",
+      "after": "34bfce0a39797d05d2bf07d283563700ac93ff9ea9bc8ed0c6064474c82556e2"
+    },
+    {
+      "path": "scripts/codex/continuous-worker.test.mjs",
+      "before": "169fd97e40dc8795a82bad6a95e2a85f8ef7d05290da8935ec1cedac3606958b",
+      "after": "169fd97e40dc8795a82bad6a95e2a85f8ef7d05290da8935ec1cedac3606958b"
+    },
+    {
+      "path": "scripts/codex/lib/codex-runner.mjs",
+      "before": "b9aa5fb9b5fb3c0d696649a71d5288181e37733393ab276956ff5ea3bcd78bc4",
+      "after": "64d5834462ef1fa0f1261cda7b61d08226c167ebade0257b85cf4db7075009dd"
+    },
+    {
+      "path": "scripts/codex/lib/failure.mjs",
+      "before": "9f8a4b22931cf8457f441db6bc5a73e17f0b9979f3b0698ca0d186e62f9ab243",
+      "after": "9f8a4b22931cf8457f441db6bc5a73e17f0b9979f3b0698ca0d186e62f9ab243"
+    },
+    {
+      "path": "scripts/codex/lib/github.mjs",
+      "before": "551b9abc568ab012dcceee9280eb85dd52f6d48b19c02fe9e6ab73561ed42000",
+      "after": "551b9abc568ab012dcceee9280eb85dd52f6d48b19c02fe9e6ab73561ed42000"
+    },
+    {
+      "path": "scripts/codex/lib/preflight.mjs",
+      "before": "6454131d6167bc1cc4e40f3f38dcd68bab402215399f85ea14552c2de0b551fb",
+      "after": "6454131d6167bc1cc4e40f3f38dcd68bab402215399f85ea14552c2de0b551fb"
+    },
+    {
+      "path": "scripts/codex/lib/process.mjs",
+      "before": "af84c3e568abee7cddbfe2b30a888bc5dfa06c7fad165a71c593a2ff2a6751f2",
+      "after": "af84c3e568abee7cddbfe2b30a888bc5dfa06c7fad165a71c593a2ff2a6751f2"
+    },
+    {
+      "path": "scripts/codex/lib/queue.mjs",
+      "before": "f35af252152aa344f3cd5faac9bc9f09907880837bf9752f9e034791870c6ba9",
+      "after": "ee3be5dd4d7bf88fceb4db8eac8b91c4a14479d72f7318b37cf5c9934b8fdcd9"
+    },
+    {
+      "path": "scripts/codex/lib/state.mjs",
+      "before": "0cf63c2635e3764fbeb978201daf9eb14a9ded8243d7adcd0585629541511e04",
+      "after": "0cf63c2635e3764fbeb978201daf9eb14a9ded8243d7adcd0585629541511e04"
+    },
+    {
+      "path": "scripts/codex/lib/telemetry.mjs",
+      "before": null,
+      "after": "6b78fe0c5df86265a7159439c6444a7a134028952342c5122d7c98e0b52ca9c8"
+    },
+    {
+      "path": "scripts/codex/lib/verification.mjs",
+      "before": "abeb9ea791df9811792cf67dd64036c2d4ed2eedb4a7e2f9cd1e822ff1dc873a",
+      "after": "abeb9ea791df9811792cf67dd64036c2d4ed2eedb4a7e2f9cd1e822ff1dc873a"
+    },
+    {
+      "path": "scripts/codex/lib/worktree.mjs",
+      "before": "4cc3e809f5ae827448af94a2c4da106d1790e44dc401e22100fea529d9023558",
+      "after": "4cc3e809f5ae827448af94a2c4da106d1790e44dc401e22100fea529d9023558"
+    },
+    {
+      "path": "scripts/codex/telemetry.test.mjs",
+      "before": null,
+      "after": "d72be01ffa306e878b16c0d4a0471ba9b33d240a5128d3cc4166559c86651ad3"
+    },
+    {
+      "path": "scripts/codex/worktree-verification.test.mjs",
+      "before": "1ebd376b67da7c0f582932d836335d2293e7ecd96b01e11d3f2475a272bec11c",
+      "after": "1ebd376b67da7c0f582932d836335d2293e7ecd96b01e11d3f2475a272bec11c"
+    }
+  ]
+}

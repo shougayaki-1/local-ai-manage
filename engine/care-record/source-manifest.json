@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "capturedAt": "2026-10-03",
+  "source": "CareRecord scripts/codex working-tree snapshot",
+  "sha256": {
+    "continuous-worker.mjs": "73a95a2e9de4b9c4f96aebc12d3aaec118d8e15e28519bf6de6f215cc5a50357",
+    "continuous-worker.test.mjs": "169fd97e40dc8795a82bad6a95e2a85f8ef7d05290da8935ec1cedac3606958b",
+    "worktree-verification.test.mjs": "1ebd376b67da7c0f582932d836335d2293e7ecd96b01e11d3f2475a272bec11c",
+    "lib/codex-runner.mjs": "b9aa5fb9b5fb3c0d696649a71d5288181e37733393ab276956ff5ea3bcd78bc4",
+    "lib/failure.mjs": "9f8a4b22931cf8457f441db6bc5a73e17f0b9979f3b0698ca0d186e62f9ab243",
+    "lib/github.mjs": "551b9abc568ab012dcceee9280eb85dd52f6d48b19c02fe9e6ab73561ed42000",
+    "lib/preflight.mjs": "6454131d6167bc1cc4e40f3f38dcd68bab402215399f85ea14552c2de0b551fb",
+    "lib/process.mjs": "af84c3e568abee7cddbfe2b30a888bc5dfa06c7fad165a71c593a2ff2a6751f2",
+    "lib/queue.mjs": "f35af252152aa344f3cd5faac9bc9f09907880837bf9752f9e034791870c6ba9",
+    "lib/state.mjs": "0cf63c2635e3764fbeb978201daf9eb14a9ded8243d7adcd0585629541511e04",
+    "lib/verification.mjs": "abeb9ea791df9811792cf67dd64036c2d4ed2eedb4a7e2f9cd1e822ff1dc873a",
+    "lib/worktree.mjs": "4cc3e809f5ae827448af94a2c4da106d1790e44dc401e22100fea529d9023558"
+  }
+}

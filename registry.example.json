@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "globalConcurrency": 1,
+  "repositories": [{
+    "id": "owner--repository",
+    "repo": "owner/repository",
+    "clonePath": "/absolute/path/to/dedicated/clone",
+    "stateDirectory": "/absolute/path/to/existing/worker/state",
+    "enabled": false,
+    "ownership": "observe-only",
+    "defaultModel": "gpt-6.1-sol",
+    "defaultEffort": "medium",
+    "maximumConcurrency": 1
+  }]
+}

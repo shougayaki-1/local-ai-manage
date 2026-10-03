@@ -1,0 +1,203 @@
+--- a/scripts/codex/continuous-worker.mjs
++++ b/scripts/codex/continuous-worker.mjs
+@@ -1,3 +1,4 @@
++import { createTelemetry } from './lib/telemetry.mjs';
+ import { homedir } from 'node:os';
+ import { resolve, join, relative, isAbsolute, dirname, basename, sep } from 'node:path';
+ import { pathToFileURL } from 'node:url';
+@@ -95,7 +96,7 @@
+   return ['npm run typecheck', 'npm run lint -- --max-warnings=0', ...tests.map(name => `npm run ${name}`), 'git diff --check'];
+ }
+ 
+-export async function worker({ config, mode = 'normal', resume = false, root = process.cwd(), execute = command, run = runCodex, now = Date.now, wait = sleep, signal, report = console.log }) {
++export async function worker({ config, mode = 'normal', resume = false, root = process.cwd(), execute = command, run = runCodex, now = Date.now, wait = sleep, signal, report = console.log, telemetry = false }) {
+   const originalExecute = execute;
+   execute = (binary, args, options) => originalExecute(binary, args, { ...options, signal });
+   config = { ...config, stateDir: await canonicalPath(config.stateDir) };
+@@ -115,7 +116,8 @@
+   const github = new GitHub(repo, execute);
+   let state = await loadState(config.stateDir);
+   if (state.repo && state.repo !== repo) throw new Error('Saved state belongs to another repository');
+-  const persist = () => saveJson(join(config.stateDir, 'state.json'), state);
++  let producer;
++  const persist = async () => { await saveJson(join(config.stateDir, 'state.json'), state); await producer?.update(state); };
+   if (mode === 'dry-run') {
+     const snapshot = await github.snapshot();
+     const issue = state.current ? await github.issue(state.current.number) : selectIssue(snapshot.issues, snapshot.dependencies, snapshot.linked);
+@@ -132,6 +134,7 @@
+     state = await loadState(config.stateDir);
+     if (state.repo && state.repo !== repo) throw new Error('Saved state belongs to another repository');
+     state.repo = repo;
++    if (telemetry) { producer = createTelemetry(config.stateDir, repo); await producer.update(state); }
+     if (state.paused && !resume) { report('Worker paused. Review state and use --resume.'); return state; }
+     // Resume only clears the pause after worktree safety is proven.
+     if (resume && !state.current) { state.paused = false; await persist(); }
+@@ -157,6 +160,7 @@
+       const current = state.current;
+       if (resolve(current.worktree) !== join(config.stateDir, 'worktrees', `issue-${current.number}`)) throw new Error('Unexpected worktree path in state');
+       const issue = await github.issue(current.number);
++      if (typeof issue.body === 'string' && /<!--\s*codex-worker-status\s*-->/.test(issue.body)) { state.paused = true; state.status = 'needs-human'; state.lastReason = 'needs_human'; await persist(); return state; }
+       const intervention = issue.state !== 'open' || labels(issue).some(n => ['codex:blocked', 'codex:failed', 'codex:needs-human'].includes(n));
+       if (intervention && !resume) { state.paused = true; state.status = 'needs-human'; state.lastReason = 'needs_human'; await persist(); return state; }
+       if (issue.state !== 'open' || labels(issue).includes('codex:blocked')) throw new Error('Current issue is closed or blocked');
+@@ -207,6 +211,7 @@
+         if (!canResumeSession) current.session = null;
+         await persist();
+         const outcome = await run({ current, issue, schemaPath: join(config.stateDir, 'result.schema.json'), tracePath: join(runDir, 'trace.jsonl'), stderrPath: join(runDir, 'stderr.log'), signal, maxRunMs: config.maxRunMs,
++          onLaunch: () => producer?.launched(),
+           onSession: async session => {
+             if (current.repair && current.session && current.session !== session) throw new WorktreeSafetyError('repair_session_mismatch');
+             current.session = session; await persist();
+@@ -316,7 +321,7 @@
+       try { await github.mark(state.current.number, 'needs_human'); } catch { /* Preserve local recovery even if GitHub is unavailable. */ }
+     }
+     throw error;
+-  } finally { await unlock(); }
++  } finally { try { await producer?.close(); } finally { await unlock(); } }
+ }
+ 
+ function metadataForReport(issue) {
+@@ -325,15 +330,15 @@
+ 
+ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+   const flags = process.argv.slice(2);
+-  if (flags.some(f => !['--once', '--dry-run', '--resume', '--status'].includes(f)) || flags.filter(f => ['--once', '--dry-run', '--status'].includes(f)).length > 1) {
+-    console.error('Usage: continuous-worker.mjs [--once | --dry-run | --status] [--resume]');
++  if (flags.some(f => !['--once', '--dry-run', '--resume', '--status', '--telemetry'].includes(f)) || flags.filter(f => ['--once', '--dry-run', '--status'].includes(f)).length > 1) {
++    console.error('Usage: continuous-worker.mjs [--once | --dry-run | --status] [--resume] [--telemetry]');
+     process.exitCode = 1;
+   } else {
+     const controller = new AbortController();
+     const stop = () => controller.abort();
+     process.on('SIGINT', stop);
+     process.on('SIGTERM', stop);
+-    try { await worker({ config: configuration(), mode: flags.includes('--status') ? 'status' : flags.includes('--dry-run') ? 'dry-run' : flags.includes('--once') ? 'once' : 'normal', resume: flags.includes('--resume'), signal: controller.signal }); }
++    try { await worker({ config: configuration(), mode: flags.includes('--status') ? 'status' : flags.includes('--dry-run') ? 'dry-run' : flags.includes('--once') ? 'once' : 'normal', resume: flags.includes('--resume'), telemetry: flags.includes('--telemetry'), signal: controller.signal }); }
+     catch (error) { console.error(error.message); process.exitCode = 1; }
+     finally { process.off('SIGINT', stop); process.off('SIGTERM', stop); }
+   }
+--- a/scripts/codex/lib/codex-runner.mjs
++++ b/scripts/codex/lib/codex-runner.mjs
+@@ -131,10 +131,12 @@
+     + `Canonical Issue URL: ${issue.html_url ?? issue.url}\nTitle: ${issue.title}\nBody:\n${issue.body ?? ''}\n`;
+ }
+ 
+-export async function runCodex({ current, issue, schemaPath, tracePath, stderrPath, signal, maxRunMs, onSession, binary = 'codex', now = Date.now, parentEnv = process.env }) {
++export async function runCodex({ current, issue, schemaPath, tracePath, stderrPath, signal, maxRunMs, onSession, onLaunch, binary = 'codex', now = Date.now, parentEnv = process.env }) {
+   const child = spawn(binary, codexArgs(current, schemaPath), {
+     cwd: current.worktree, env: safeEnvironment(parentEnv, { purpose: 'codex' }), detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
+   });
++  let launch = Promise.resolve();
++  child.once('spawn', () => { launch = Promise.resolve().then(() => onLaunch?.()).catch(() => {}); });
+   let interrupted = false;
+   let quota = null;
+   let resetAt = null;
+@@ -197,6 +199,6 @@
+   clearTimeout(timer);
+   clearTimeout(escalation);
+   signal?.removeEventListener('abort', stop);
+-  await Promise.all([stdout, stderr]);
++  await Promise.all([stdout, stderr, launch]);
+   return { code: streamError ? 1 : code, result, quota, resetAt, needsHuman, interrupted, safetyReason };
+ }
+--- a/scripts/codex/lib/queue.mjs
++++ b/scripts/codex/lib/queue.mjs
+@@ -23,6 +23,7 @@
+ export function selectIssue(issues, dependencyStates, linkedIssues = new Set()) {
+   const candidates = [];
+   for (const issue of issues) {
++    if (typeof issue.body === 'string' && /<!--\s*codex-worker-status\s*-->/.test(issue.body)) continue;
+     const names = labels(issue);
+     if (issue.state.toLowerCase() !== 'open' || !names.includes('codex:ready') || names.some(n => excluded.has(n)) || linkedIssues.has(issue.number)) continue;
+     let info;
+--- /dev/null
++++ b/scripts/codex/lib/telemetry.mjs
+@@ -0,0 +1,46 @@
++import { open, rename, unlink } from 'node:fs/promises';
++import { join } from 'node:path';
++import { randomUUID } from 'node:crypto';
++// No free text enters this channel. It is diagnostic only, never an execution gate.
++export function createTelemetry(directory, repo, { now=Date.now, intervalMs=15_000 }={}) {
++  let state=null, invocation=null, timer=null, stopped=false, sequence=0, events=[], signature=null;
++  let lane=Promise.resolve(), queued=false;
++  const runId=randomUUID();
++  const number=value=>Number.isSafeInteger(value)&&value>0?value:null;
++  const queue=()=>{
++    if (queued) return lane;
++    queued=true;
++    lane=lane.then(async()=>{
++      queued=false;
++      const value={version:1,repo,runId,sequence:++sequence,updatedAt:now(),lifecycle:stopped?'stopped':'active',issue:state.issue,stage:state.stage,status:state.status,invocation,events:[...events]};
++      const path=join(directory,'telemetry.json'), temporary=`${path}.${randomUUID()}.tmp`;
++      let file;
++      try {
++        file=await open(temporary,'wx',0o600);
++        await file.writeFile(JSON.stringify(value)+'\n');await file.sync();await file.close();file=null;
++        await rename(temporary,path);
++      } finally {await file?.close();await unlink(temporary).catch(()=>{});}
++    }).catch(()=>{/* Missing/stale telemetry is displayed as unavailable; job semantics stay intact. */});
++    return lane;
++  };
++  const event=type=>{events.push({at:now(),type,issue:state.issue,stage:state.stage,status:state.status});events=events.slice(-100);};
++  return {
++    async update(raw) {
++      if(stopped)return;
++      state={issue:number(raw.current?.number),stage:['prepare','implement','publish'].includes(raw.current?.stage)?raw.current.stage:null,status:['idle','running','quota-wait','needs-human','failed'].includes(raw.status)?raw.status:'idle'};
++      if(invocation?.issue!==state.issue)invocation=null;
++      const next=JSON.stringify(state);if(signature!==next){signature=next;event('state');}
++      if(!timer){event('worker.started');timer=setInterval(()=>{void queue();},intervalMs);timer.unref();}
++      await queue();
++    },
++    async launched() {
++      if(!state||stopped||!state.issue)return;
++      invocation={issue:state.issue,model:'gpt-6.1-sol',effort:'medium',source:'cli-spawn'};
++      event('codex.started');await queue();
++    },
++    async close() {
++      clearInterval(timer);if(!state)return;
++      stopped=true;event('worker.stopped');await queue();await lane;
++    },
++  };
++}
+--- /dev/null
++++ b/scripts/codex/telemetry.test.mjs
+@@ -0,0 +1,39 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
++import { join } from 'node:path';
++import { createTelemetry } from './lib/telemetry.mjs';
++import { codexArgs, runCodex } from './lib/codex-runner.mjs';
++async function fixture(t){const root=await mkdtemp('/private/tmp/worker-telemetry-');t.after(()=>rm(root,{recursive:true,force:true}));return root;}
++test('telemetry starts only when updated, heartbeats, stops, bounds events and excludes private state',async t=>{
++ const root=await fixture(t);let now=1000;const producer=createTelemetry(root,'test/repo',{now:()=>now,intervalMs:5});
++ await producer.close();await assert.rejects(readFile(join(root,'telemetry.json')));
++ const telemetry=createTelemetry(root,'test/repo',{now:()=>now,intervalMs:5});
++ const raw={status:'running',current:{number:1,stage:'implement',session:'PRIVATE_SESSION',result:'PHI_TEXT'},secret:'SECRET'};
++ await telemetry.update(raw);assert.equal(JSON.parse(await readFile(join(root,'telemetry.json'))).invocation,null);
++ await telemetry.launched();for(let n=0;n<110;n++){now++;await telemetry.update({...raw,status:n%2?'idle':'running'});}
++ now=5000;await new Promise(resolve=>setTimeout(resolve,30));
++ const heartbeat=JSON.parse(await readFile(join(root,'telemetry.json')));assert.equal(heartbeat.updatedAt,now);assert.equal(heartbeat.lifecycle,'active');assert.equal(heartbeat.events.length,100);
++ assert.equal(heartbeat.invocation.model,'gpt-6.1-sol');assert.ok(codexArgs({},'/schema').includes(`model="${heartbeat.invocation.model}"`));assert.ok(codexArgs({},'/schema').includes(`model_reasoning_effort="${heartbeat.invocation.effort}"`));
++ await telemetry.update({...raw,current:{number:2,stage:'prepare'}});await telemetry.close();
++ const bytes=await readFile(join(root,'telemetry.json'),'utf8');const stopped=JSON.parse(bytes);assert.equal(stopped.lifecycle,'stopped');assert.equal(stopped.invocation,null);assert.equal(stopped.events.at(-1).type,'worker.stopped');
++ for(const canary of ['PRIVATE_SESSION','PHI_TEXT','SECRET'])assert.ok(!bytes.includes(canary));assert.equal((await stat(join(root,'telemetry.json'))).mode&0o777,0o600);
++});
++test('diagnostic storage failure does not change job semantics',async t=>{
++ const root=await fixture(t);const telemetry=createTelemetry(join(root,'absent'),'test/repo');await telemetry.update({status:'idle',current:null});await telemetry.launched();await telemetry.close();
++});
++test('CLI launch notification requires OS spawn success',async t=>{
++ const root=await fixture(t);const binary=join(root,'fake-codex');await writeFile(binary,'#!/bin/sh\ncat >/dev/null\nexit 0\n',{mode:0o700});
++ let launches=0;const options={current:{number:1,worktree:root},issue:{number:1,title:'Synthetic',body:''},schemaPath:'/schema',tracePath:join(root,'trace'),stderrPath:join(root,'stderr'),onSession:async()=>{},onLaunch:async()=>{launches++;}};
++ await runCodex({...options,binary});assert.equal(launches,1);
++ await runCodex({...options,binary:join(root,'missing')});assert.equal(launches,1);
++});
++
++import { worker, configuration } from './continuous-worker.mjs';
++import { emptyState } from './lib/state.mjs';
++import { mkdir, realpath } from 'node:fs/promises';
++async function legacyFixture(t) { const directory=await realpath(await fixture(t));const root=join(directory,'clone'),stateDir=join(directory,'state');await mkdir(root);await mkdir(stateDir,{mode:0o700});const state={...emptyState(),repo:'test/repo',paused:true,secret:'SECRET_CANARY',current:null};const bytes=JSON.stringify(state);await writeFile(join(stateDir,'state.json'),bytes,{mode:0o600});const execute=async(binary,args)=>binary==='git'?'https://github.com/test/repo.git':args[0]==='api'?'[]':'';return {root,stateDir,state,bytes,execute,config:configuration({CODEX_WORKER_REPO:'test/repo',CODEX_WORKER_STATE_DIR:stateDir})}; }
++test('standalone telemetry is opt-in and a paused job keeps state bytes while closing its sidecar',async t=>{const f=await legacyFixture(t);await worker({...f,mode:'once',report:()=>{}});await assert.rejects(readFile(join(f.stateDir,'telemetry.json')));await worker({...f,mode:'once',telemetry:true,report:()=>{}});assert.equal(await readFile(join(f.stateDir,'state.json'),'utf8'),f.bytes);const value=JSON.parse(await readFile(join(f.stateDir,'telemetry.json')));assert.equal(value.lifecycle,'stopped');assert.equal(value.invocation,null);assert.ok(!JSON.stringify(value).includes('SECRET_CANARY'));await assert.rejects(readFile(join(f.stateDir,'worker.lock')));});
++test('status/dry-run and rejected worker lock do not create or replace producer evidence',async t=>{const f=await legacyFixture(t);for(const mode of ['status','dry-run']){await worker({...f,mode,telemetry:true,report:()=>{}});await assert.rejects(readFile(join(f.stateDir,'telemetry.json')));}await writeFile(join(f.stateDir,'telemetry.json'),'PRIOR_EVIDENCE');await writeFile(join(f.stateDir,'worker.lock'),'OWNER_PID');await assert.rejects(worker({...f,mode:'once',telemetry:true,report:()=>{}}));assert.equal(await readFile(join(f.stateDir,'telemetry.json'),'utf8'),'PRIOR_EVIDENCE');assert.equal(await readFile(join(f.stateDir,'worker.lock'),'utf8'),'OWNER_PID');assert.equal(await readFile(join(f.stateDir,'state.json'),'utf8'),f.bytes);});
++test('saved status Issue is paused without Codex, publication, queue labels or session reset even on resume',async t=>{const f=await legacyFixture(t);const current={number:99,branch:'codex/issue-99-status',worktree:join(f.stateDir,'worktrees/issue-99'),stage:'implement',session:'SESSION_CANARY',failures:1,quotaWaits:2,base:'BASE_CANARY'};await writeFile(join(f.stateDir,'state.json'),JSON.stringify({...f.state,current,paused:false,status:'running'}));const calls=[];const execute=async(binary,args)=>{calls.push([binary,...args]);if(binary==='git')return 'https://github.com/test/repo.git';if(args[0]==='auth')return '';if(args[0]==='api')return JSON.stringify({number:99,state:'open',labels:['codex:ready'],body:'<!-- codex-worker-status -->'});assert.fail('no mutations');};const result=await worker({...f,execute,mode:'once',resume:true,telemetry:true,run:async()=>assert.fail('no Codex'),report:()=>{}});assert.equal(result.status,'needs-human');assert.equal(result.paused,true);assert.deepEqual(result.current,current);assert.ok(!calls.some(c=>c.includes('comment')||c.includes('edit')||c.includes('push')));});
++test('heartbeat advances while the real fake Codex subprocess is still running', {timeout:5000}, async t=>{const root=await fixture(t);const binary=join(root,'long-fake-codex');await writeFile(binary,'#!/bin/sh\ncat >/dev/null\nsleep 0.15\nexit 0\n',{mode:0o700});const telemetry=createTelemetry(root,'test/repo',{intervalMs:5});await telemetry.update({status:'running',current:{number:1,stage:'implement'}});let launched;const ready=new Promise(resolve=>{launched=resolve;});const running=runCodex({binary,current:{number:1,worktree:root},issue:{number:1,title:'Synthetic',body:''},schemaPath:'/schema',tracePath:join(root,'trace'),stderrPath:join(root,'stderr'),parentEnv:{PATH:'/usr/bin:/bin',HOME:root},onLaunch:async()=>{await telemetry.launched();launched();}});await ready;const before=JSON.parse(await readFile(join(root,'telemetry.json')));await new Promise(resolve=>setTimeout(resolve,40));const after=JSON.parse(await readFile(join(root,'telemetry.json')));assert.ok(after.sequence>before.sequence);assert.equal(after.lifecycle,'active');assert.equal(after.invocation.model,'gpt-6.1-sol');await running;await telemetry.close();});

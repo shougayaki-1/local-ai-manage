@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env*
+registry.local.json
+*.log
+.DS_Store
+
+registry.*.local.json

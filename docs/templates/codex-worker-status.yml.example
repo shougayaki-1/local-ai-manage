@@ -1,0 +1,38 @@
+# Inactive template. Install only after stopping every direct comment writer.
+name: Codex Worker sole status writer
+on:
+  workflow_dispatch:
+    inputs:
+      payload:
+        description: Sanitized status envelope; empty performs stale inspection
+        required: false
+        type: string
+  schedule:
+    - cron: '7,17,27,37,47,57 * * * *'
+permissions:
+  contents: read
+  issues: write
+concurrency:
+  group: codex-worker-status-sole-writer
+  cancel-in-progress: false
+jobs:
+  status:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Update fixed status comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS_ISSUE: ${{ vars.CODEX_STATUS_ISSUE }}
+          STATUS_COMMENT: ${{ vars.CODEX_STATUS_COMMENT }}
+          STATUS_PAYLOAD: ${{ inputs.payload }}
+        run: node engine/status-writer.mjs
