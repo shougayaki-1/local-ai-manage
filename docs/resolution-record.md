@@ -27,6 +27,10 @@
 
 Codex CLIは0.160.0、workerと同じCodex専用envでlogin statusがChatGPT認証、exec/resumeのhelpに必要なschema/json/sandbox機能を確認。保存credentialの存在確認であり、実model呼出・session resume成功の証明ではない。Sol/mediumを維持し、API key authへ切り替えていない。
 
+## ローカルGit保存
+
+local-ai-manageを`codex/initial-controller`へ保存した。初期実装は33c20c3、patch contextの属性とengine EOFの整備は18ba9d7。履歴全体のdiff whitespace検査と、整備後のtypecheck/lintが成功。private registry/state、credential、検証ログは追跡対象外。GitHubへのpushやPR作成は未実施。
+
 ## 次の実運用段階
 
 #55の差分レビュー・Draft PRと実worker trialが残る。保存needs-human/currentを単にresetして次Issueへ移らない。controllerは全体/repo Pauseのまま。実投稿、queue label変更、PR merge、deployは行っていない。

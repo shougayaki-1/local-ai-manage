@@ -36,13 +36,13 @@ GUIからのlocal diff閲覧、Tauri、LAN/スマホ公開、repo並列実行、
 - 登録済みcloneへのread-only producer照合: ready-for-review。稼働processがどのsourceをロードしているかの証明には使わない。
 - 実Codex dispatch、E2E、実PR投稿、実status投稿、workflow schedule登録、live移管は未実施。
 
-## 実運用への切替前に必要な手順
+## 準備時点の切替手順（1〜4はこのMacで実施済み）
 
-1. `docs/producer-migration.md`の専用bundleをレビューし、採用source/releaseを決める。Git repositoryはまだ初期commit前で、稼働用releaseとして公開していない。
+1. `docs/producer-migration.md`の専用bundleをレビューし、採用source/releaseを決める。ローカル初期commitは保存済み。稼働用releaseとしての公開は未実施。
 2. 稼働standalone/controller/worker/Codex子processを確認し、安全な停止境界と自動再起動防止を管理者が確認する。lockやheartbeat不在から停止を推測しない。
 3. 最新sourceでproducer planとpatch checkを再実行し、承認済みcloneへ適用する。対象CareRecord側の検証条件を満たす。state/session/retry/quotaは維持する。
 4. `README.md`/`docs/recovery.md`に従ってprivate controllerとregistry-bound handoffを準備する。最初は全体/repo pausedに保つ。不明なjobはoffline reviewに戻す。
 5. Status Issue/commentの固定IDとmarker、codex:* label不在を確認する。直接publisherかActions sole writerの一方を選ぶ。Actionsを採用する場合は全ての旧comment writerを停止してからreview済みscript/templateをdefault branchへ配置する。
 6. 限定trialで1 repo・1 Issue・global 1を確認し、その後repoを追加する。auto merge、E2E、deploy/production操作は許可しない。
 
-最初の依頼で稼働worker停止・LaunchAgent/current state/GitHub queue変更が禁止されたため、これらの実操作を自動実行していない。実装の検証成功をlive移管完了とは扱わない。
+最初の依頼では運用変更が禁止された。その後の許可で停止・再起動防止・producer適用・Pause状態の移管準備を実施した。保存current/sessionとGitHub queue/labelsは維持している。実装の検証成功をlive dispatch成功とは扱わない。最新の残作業は停止原因解消記録を参照。

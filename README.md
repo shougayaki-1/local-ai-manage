@@ -35,7 +35,7 @@ npm start -- --registry registry.local.json --github --status
 
 ## Controller設定
 
-GUIで全体Pause/Resume、repositoryごとのPause/Resume・Enable/Disableを保存できます。**既定の起動では設定保存のみ**です。`--execute`で明示的に移管設定を接続した起動では、schedulerの次のdispatchへ適用します。現在のローカルCareRecordは移管・実行接続していません。GUI操作はneeds-human、workerのpaused、failure counter、session、quota、GitHub labelを直接変更しません。managed workerの通常処理は既存契約に従ってstate/labelを更新します。
+GUIで全体Pause/Resume、repositoryごとのPause/Resume・Enable/Disableを保存できます。**既定の起動では設定保存のみ**です。`--execute`で明示的に移管設定を接続した起動では、schedulerの次のdispatchへ適用します。このMacでは専用producerとmanaged controller/handoffを準備し、全体/repo PauseでGUI接続を確認済みです。実dispatchは未実施です。GUI操作はneeds-human、workerのpaused、failure counter、session、quota、GitHub labelを直接変更しません。managed workerの通常処理は既存契約に従ってstate/labelを更新します。
 
 初回は全体およびrepositoryがPausedです。独立保存領域は `~/.local/state/local-ai-manage`。別pathは `--controller-state /absolute/private/directory` で指定できます（親directoryは事前作成）。clone/worker stateと重なるpath、symlink、他ユーザー所有、group/worldアクセス可能なdirectoryは拒否します。directoryは0700、ファイルは0600。demoおよびCLI `--status` はcontrollerを開かず、worker観測だけを返します。
 
@@ -136,7 +136,7 @@ cursor・実行予約・cooldown・quota期限は0700 controller directoryの060
 
 Ctrl+C/SIGTERMは新規dispatchを止め、現在jobの完了を待ちます。trusted bridgeは別process groupで動くため、TerminalのCtrl+Cが子workerを直接終了させません。強制終了やOS再起動ではorphan確認が必要です。dashboard終了中もreceipt/statusで完了待ちを表示できます。
 
-heartbeat／CLI起動model・effort／sanitized eventsを実装済みです。offline controller復旧CLIも実装済みです。復旧途中のjournal replayとlocal-ai-manage profileも実装済みです。残る作業はlive移管、旧CareRecord producer/remote status連携、追加repo用のreviewed profileです。live dispatch・移管はこの実装検証では行っていません。
+heartbeat／CLI起動model・effort／sanitized eventsを実装済みです。offline controller復旧CLIも実装済みです。復旧途中のjournal replayとlocal-ai-manage profileも実装済みです。このMacでは旧workerの自動起動停止、専用producer適用、Pause状態のmanaged設定まで実施済みです。残る作業は限定live dispatch、remote statusの有効化、追加repoの登録と検証です。
 
 ### Worker telemetry
 
@@ -163,7 +163,7 @@ npm start -- --registry registry.local.json --remote-status --github
 
 `--preflight`は移管準備の診断です。停止の証明や実行許可には使いません。`--github`付きでは固定gh auth statusだけで認証を確認します。CodexのChatGPT login・CLI互換性、実process停止・自動再起動防止は人の確認事項です。問題ありはexit 2、確認事項が残る通常診断はexit 0で、authorizesDispatchは常にfalseです。
 
-`--remote-status`はCareRecord Issue #73のmarkerとheartbeat timestampを使ったコメント本文previewをJSONで出力します。GitHub投稿・専用Issue作成・Actions追加は実装していません。旧workerに有効なsidecarがなければheartbeatはunknown、quotaがないだけでavailableとは表示しません。詳細は[接続・点検手順](docs/connection.md)。
+`--remote-status`はCareRecord Issue #73のmarkerとheartbeat timestampを使ったコメント本文previewをJSONで出力します。このpreviewコマンドではGitHubへ投稿しません。固定comment publisherとActions用テンプレートは後述のopt-in経路で実装済みですが、専用Issue作成・実投稿・Actions有効化は未実施です。旧workerに有効なsidecarがなければheartbeatはunknown、quotaがないだけでavailableとは表示しません。詳細は[接続・点検手順](docs/connection.md)。
 
 ## 固定コメントpublisherと独立監視
 
@@ -171,13 +171,13 @@ opt-in `--status-publisher /private/status`（registryと--github必須）で管
 
 ## 旧CareRecord producerの移植準備
 
-`--producer-plan --registry registry.local.json`でレビュー済みパッチのsource hashesを読み取り専用照合できます。開発snapshot用と専用clone用の2つのbundleを準備し、一時コピーでそれぞれ101件・103件のworker回帰を確認しました。専用cloneのdeployment抑止・components全体の検証を保持したbundleが、現在の照合でready-for-reviewです。実source/LaunchAgentに適用していません。詳細は[producer移植手順](docs/producer-migration.md)。
+`--producer-plan --registry registry.local.json`でレビュー済みパッチのsource hashesを読み取り専用照合できます。開発snapshot用と専用clone用の2つのbundleを準備し、一時コピーでそれぞれ101件・103件のworker回帰を確認しました。専用cloneのdeployment抑止・components全体の検証を保持したbundleを、このMacの専用cloneへ適用済みです。適用後の照合はalready-presentで、旧LaunchAgentは停止・自動起動無効化済みです。詳細は[producer移植手順](docs/producer-migration.md)。
 
 GUIの「切替前の確認」は認証済みのread-only `/api/readiness`で、保存状態の診断とproducer bundle照合を表示します。30秒cacheを使い、GUI自身のcontroller lockを識別します。表示から移管やdispatchを許可する経路はありません。
 
 同一コメント上のstale自動表示には `--status-actions /absolute/private/status`を用意しました。Mac側は固定workflowへsanitized observationを送信し、Actionsが更新・監視を同じ直列laneで処理します。逆順eventは観測時刻で拒否します。テンプレートは未有効化で、直接publisherとの併用は不可です。詳細は[status更新・監視手順](docs/publishing.md)。
 
-現在の要件・検証結果・実運用前の残項目は[確認記録](docs/acceptance-review.md)にまとめています。
+現在の要件・検証結果は[確認記録](docs/acceptance-review.md)、buildと#55の修正結果・残作業は[停止原因解消記録](docs/resolution-record.md)にまとめています。
 
 ## このMacの管理設定（2026-10-04）
 
@@ -185,4 +185,4 @@ GUIの「切替前の確認」は認証済みのread-only `/api/readiness`で、
 
 `Managed-Launch.command`をダブルクリックすると、git対象外の `registry.managed.local.json` とprivate managed controllerを使います。通常の `Launch.command` は引き続きobserve-onlyです。管理設定は全体・repoともPause、Issue #55もneeds-human/pausedのままです。Resume操作は#55の人待ちを解除しません。再起動では保存したcontrol設定が引き継がれるため、Resume後は起動時の状態を確認してください。
 
-clone側worker 103件・typecheck・lintは成功。CareRecord buildはSupabase環境変数不足でページ収集に失敗しており、実Codex/PR publication trialは未実施です。資格情報を移植してこの障害を回避していません。Status workflow/実投稿も未有効化です。
+clone側worker 103件・typecheck・lintは成功。buildは既存workerと同じCI合成環境でclone/#55 worktreeとも成功しました。#55の削除順序と同期未完了UIも修正し、unit 516件・typecheck・lint・buildを検証済みです。本番資格情報は移植していません。実Codex/PR publication trial、Status workflow有効化・実投稿は未実施です。
