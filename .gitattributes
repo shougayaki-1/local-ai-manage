@@ -1,0 +1,3 @@
+# Reviewed unified patches contain a space prefix on empty context lines.
+# Keep those bytes intact for their manifest hashes and git apply.
+integrations/**/producer.patch whitespace=-blank-at-eol

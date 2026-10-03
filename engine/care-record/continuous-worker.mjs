@@ -349,4 +349,3 @@ export async function worker({ config, mode = 'normal', resume = false, expected
 function metadataForReport(issue) {
   try { return metadata(issue.body).dependencies; } catch { return 'invalid metadata'; }
 }
-
