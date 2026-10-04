@@ -14,9 +14,9 @@ async function body(req: IncomingMessage): Promise<unknown> {
 export async function startServer({snapshot,webDirectory,port=0,now=Date.now,controller,readiness}:{snapshot:()=>Promise<Snapshot>;webDirectory:string;port?:number;now?:()=>number;controller?:Controller;readiness?:()=>Promise<ReadinessReport>}) {
   const web=await realpath(webDirectory);
   if (!(await stat(join(web,'index.html'))).isFile()) throw new Error('build_required');
-  const nonce=randomBytes(32).toString('hex'); const session=randomBytes(32).toString('hex');
+  let nonce=randomBytes(32).toString('hex'); const session=randomBytes(32).toString('hex');
   const csrf=randomBytes(32).toString('hex'); let writeWindow=now();let writeCount=0;
-  const started=now(); let redeemed=false; let attempts=0; let inFlight: Promise<Snapshot>|null=null;
+  let started=now(); let redeemed=false; let authenticated=false; let authenticatedAt=0; let attempts=0; let inFlight: Promise<Snapshot>|null=null;
   let origin=''; let host=''; let readWindow=now(); let readCount=0;
   const server=createServer({headersTimeout:5000,requestTimeout:10000,maxHeaderSize:8192}, async(req,res)=>{
     const send=(code:number,value:unknown)=>{ res.writeHead(code,{'Content-Type':'application/json; charset=utf-8'}); res.end(JSON.stringify(value)); };
@@ -34,12 +34,12 @@ export async function startServer({snapshot,webDirectory,port=0,now=Date.now,con
         if (!value || typeof value!=='object' || Array.isArray(value) || Object.keys(value).length!==1 || !('nonce' in value) || typeof value.nonce!=='string' || !equal(value.nonce,nonce)) return send(403,{error:'request_rejected'});
         // Recheck after asynchronous body read to make redemption single-use under concurrency.
         if (redeemed || now()-started>120_000) return send(403,{error:'bootstrap_expired'});
-        redeemed=true; res.setHeader('Set-Cookie',`lam_session=${session}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800`);
+        redeemed=true; authenticated=true; authenticatedAt=now(); res.setHeader('Set-Cookie',`lam_session=${session}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800`);
         return send(200,{authenticated:true,csrf});
       }
       if (controller && (url.pathname==='/api/controls' || url.pathname==='/api/csrf' || url.pathname.startsWith('/api/requests/'))) {
         const cookie=req.headers.cookie?.split(';').map(v=>v.trim()).find(v=>v.startsWith('lam_session='))?.slice(12) ?? '';
-        if (!redeemed || now()-started>28_800_000 || !equal(cookie,session)) return send(401,{error:'authentication_required'});
+        if (!authenticated || now()-authenticatedAt>28_800_000 || !equal(cookie,session)) return send(401,{error:'authentication_required'});
         if (req.method==='GET') {
           if(now()-readWindow>=60_000){readWindow=now();readCount=0;}
           if(++readCount>120)return send(429,{error:'rate_limited'});
@@ -57,7 +57,7 @@ export async function startServer({snapshot,webDirectory,port=0,now=Date.now,con
       if (req.method!=='GET') return send(405,{error:'method_not_allowed'});
       if (url.pathname.startsWith('/api/')) {
         const cookie=req.headers.cookie?.split(';').map(v=>v.trim()).find(v=>v.startsWith('lam_session='))?.slice(12) ?? '';
-        if (!redeemed || now()-started>28_800_000 || !equal(cookie,session)) return send(401,{error:'authentication_required'});
+        if (!authenticated || now()-authenticatedAt>28_800_000 || !equal(cookie,session)) return send(401,{error:'authentication_required'});
         if (now()-readWindow>=60_000) { readWindow=now(); readCount=0; }
         if (++readCount>120) return send(429,{error:'rate_limited'});
         if(url.pathname==='/api/readiness'){if(!readiness)return send(404,{error:'not_found'});return send(200,await readiness());}
@@ -84,5 +84,5 @@ export async function startServer({snapshot,webDirectory,port=0,now=Date.now,con
   await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen({host:'127.0.0.1',port},()=>{server.off('error',reject);resolve();});});
   const address=server.address(); if (!address || typeof address==='string') throw new Error('listen_failed');
   host=`127.0.0.1:${address.port}`; origin=`http://${host}`;
-  return {server,origin,launchUrl:`${origin}/#${nonce}`,close:()=>new Promise<void>((resolve,reject)=>{server.close(error=>error?reject(error):resolve());server.closeIdleConnections();})};
+  return {server,origin,issueLaunchUrl:()=>{nonce=randomBytes(32).toString('hex');started=now();redeemed=false;attempts=0;return `${origin}/#${nonce}`;},launchUrl:`${origin}/#${nonce}`,close:()=>new Promise<void>((resolve,reject)=>{server.close(error=>error?reject(error):resolve());server.closeIdleConnections();})};
 }

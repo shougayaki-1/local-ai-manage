@@ -11,7 +11,7 @@ export function assertManagerScripts(scripts){
  for(const name of ['typecheck','lint','test','build'])assertManagerCheck(scripts,name);
 }
 export function managerProtected(changed){
- return changed.some(line=>/\s+(?:engine\/|integrations\/|src\/(?:cli|controller|scheduler|worker-adapter|registry|handoff|recovery(?:-guard)?|github-queue|preflight|readiness|remote-status|status-publisher|status-actions|producer-plan|server|snapshot|telemetry|profiles|types)\.ts$|(?:Managed-)?Launch\.command$|registry\.[^/]+\.json$|(?:eslint|vite)\.config\.|tsconfig(?:\.server)?\.json$|\.agents\/|\.codex\/|\.github\/)/.test(line));
+ return changed.some(line=>/\s+(?:engine\/|integrations\/|src\/(?:cli|controller|scheduler|worker-adapter|registry|handoff|recovery(?:-guard)?|github-queue|preflight|readiness|remote-status|status-publisher|status-actions|producer-plan|server|dashboard-socket|snapshot|telemetry|profiles|types)\.ts$|(?:Managed-)?Launch\.command$|registry\.[^/]+\.json$|(?:eslint|vite)\.config\.|tsconfig(?:\.server)?\.json$|\.agents\/|\.codex\/|\.github\/)/.test(line));
 }
 
 export class ProfileBindingError extends Error {}

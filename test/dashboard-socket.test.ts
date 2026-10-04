@@ -1,0 +1,33 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, chmod, mkdir, rm, realpath } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createConnection } from 'node:net';
+import { startDashboardSocket, dashboardLaunchUrl } from '../src/dashboard-socket.ts';
+import { startServer } from '../src/server.ts';
+import { demoSnapshot } from '../src/snapshot.ts';
+test('owner-only dashboard IPC rotates bootstrap without expiring an existing browser session',async t=>{
+ const directory=await realpath(await mkdtemp(join(tmpdir(),'lam-socket-')));await chmod(directory,0o700);let now=1000;
+ const dashboard=await startServer({snapshot:async()=>demoSnapshot(),webDirectory:join(process.cwd(),'dist/web'),now:()=>now});
+ t.after(()=>dashboard.close());
+ const ipc=await startDashboardSocket(directory,()=>dashboard.issueLaunchUrl());
+ t.after(async()=>{await ipc.close();await rm(directory,{recursive:true,force:true});});
+ const login=(url:string)=>fetch(dashboard.origin+'/api/session',{method:'POST',headers:{Origin:dashboard.origin,'Content-Type':'application/json','x-local-bootstrap':'1'},body:JSON.stringify({nonce:new URL(url).hash.slice(1)})});
+ const first=await login(dashboard.launchUrl);assert.equal(first.status,200);const cookie=first.headers.get('set-cookie')!.split(';')[0]!;
+ now+=130000;assert.equal((await login(dashboard.launchUrl)).status,403);
+ const next=await dashboardLaunchUrl(directory);assert.notEqual(next,dashboard.launchUrl);
+ assert.equal((await fetch(dashboard.origin+'/api/status',{headers:{Cookie:cookie}})).status,200);
+ assert.equal((await login(next)).status,200);assert.equal((await login(next)).status,403);
+ now+=28800001;assert.equal((await fetch(dashboard.origin+'/api/status',{headers:{Cookie:cookie}})).status,401);
+ assert.equal((await login(await dashboardLaunchUrl(directory))).status,200);
+});
+test('dashboard IPC rejects public directories, duplicate owners and arbitrary commands',async t=>{
+ const directory=await realpath(await mkdtemp(join(tmpdir(),'lam-socket-')));t.after(()=>rm(directory,{recursive:true,force:true}));
+ await chmod(directory,0o755);await assert.rejects(startDashboardSocket(directory,()=>''));await chmod(directory,0o700);
+ let issued=0;const ipc=await startDashboardSocket(directory,()=>{issued++;return 'http://127.0.0.1:1234/#'+'a'.repeat(64);});t.after(()=>ipc.close());
+ await assert.rejects(startDashboardSocket(directory,()=>''));
+ assert.match(await dashboardLaunchUrl(directory),/^http:\/\/127/);issued=0;
+ await new Promise<void>(resolve=>{const client=createConnection(join(directory,'dashboard.sock'));client.on('error',()=>{});client.on('close',()=>resolve());client.on('connect',()=>client.write('EXEC\n'));});assert.equal(issued,0);
+ const nested=join(directory,'nested');await mkdir(nested,{mode:0o755});await assert.rejects(dashboardLaunchUrl(nested));
+});

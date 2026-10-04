@@ -1,3 +1,4 @@
+import { startDashboardSocket, dashboardLaunchUrl } from './dashboard-socket.ts';
 import { ActionsStatusPublisher } from './status-actions.ts';
 import { ReadinessService, demoReadiness } from './readiness.ts';
 import { producerPlan } from './producer-plan.ts';
@@ -20,16 +21,18 @@ import { startServer } from './server.ts';
 import { QueueObserver } from './github-queue.ts';
 async function main() {
   const args=process.argv.slice(2);
+  if(args.length===3&&args[0]==='--open-existing'&&args[1]==='--controller-state'){const url=await dashboardLaunchUrl(resolve(args[2]!));await new Promise<void>((resolve,reject)=>{const child=spawn('/usr/bin/open',[url],{stdio:'ignore',env:{PATH:'/usr/bin:/bin'}});child.once('error',reject);child.once('exit',code=>code===0?resolve():reject(new Error('browser_unavailable')));});return;}
   if(args.length===1&&args[0]==='--profiles'){console.log(JSON.stringify(reviewedProfiles,null,2));return;}
   let actionsPublisher=false;let publisherDirectory:string|undefined;let monitorDirectory:string|undefined;
   let producerReview=false;
   let check=false;let remoteStatus=false;
-  let config: string|undefined;let controlDirectory:string|undefined; let demo=false; let open=false; let status=false; let port=0; let github=false;let execute=false;let recoveryTarget:string|undefined;let recoveryApply=false;let recoveryResume=false;let attestationPath:string|undefined;
+  let config: string|undefined;let controlDirectory:string|undefined; let headless=false; let demo=false; let open=false; let status=false; let port=0; let github=false;let execute=false;let recoveryTarget:string|undefined;let recoveryApply=false;let recoveryResume=false;let attestationPath:string|undefined;
   for (let i=0;i<args.length;i++) {
     const arg=args[i];
     if(['--recovery-plan','--reconcile','--recovery-resume-plan','--resume-recovery'].includes(arg!)){if(recoveryTarget)throw new Error('invalid_flags');recoveryTarget=args[++i];recoveryApply=arg==='--reconcile'||arg==='--resume-recovery';recoveryResume=arg==='--recovery-resume-plan'||arg==='--resume-recovery';if(!recoveryTarget||recoveryTarget.startsWith('--'))throw new Error('invalid_flags');}
     else if(arg==='--attestation'){attestationPath=args[++i];if(!attestationPath||attestationPath.startsWith('--'))throw new Error('invalid_flags');}
     else if(arg==='--status-publisher'||arg==='--status-actions'||arg==='--status-monitor'){const value=args[++i];if(!value||value.startsWith('--')||publisherDirectory||monitorDirectory)throw new Error('invalid_flags');if(arg==='--status-monitor')monitorDirectory=resolve(value);else {publisherDirectory=resolve(value);actionsPublisher=arg==='--status-actions';}}
+    else if(arg==='--headless') headless=true;
     else if(arg==='--producer-plan') producerReview=true;
     else if(arg==='--preflight') check=true;
     else if(arg==='--remote-status') remoteStatus=true;
@@ -43,6 +46,7 @@ async function main() {
     else if (arg==='--port') { const v=args[++i]; if (!v || !/^\d+$/.test(v)) throw new Error('invalid_port'); port=Number(v); if (!Number.isSafeInteger(port)||port>65535) throw new Error('invalid_port'); }
     else throw new Error('invalid_flags');
   }
+  if(headless&&(!execute||!controlDirectory||open||demo||publisherDirectory||monitorDirectory||status||check||remoteStatus||recoveryTarget))throw new Error('invalid_headless');
   if(producerReview&&(publisherDirectory||monitorDirectory||demo||open||status||execute||check||remoteStatus||controlDirectory||recoveryTarget||attestationPath||port!==0||github||!config))throw new Error('producer_plan_flags_invalid');
   if(publisherDirectory||monitorDirectory){if(demo||open||status||execute||check||remoteStatus||controlDirectory||recoveryTarget||attestationPath||port!==0||monitorDirectory&&(config||github)||publisherDirectory&&(!config||!github))throw new Error('status_service_flags_invalid');}
   if(monitorDirectory){const result=await monitorStatus(await loadStatusTargets(monitorDirectory));console.log(JSON.stringify(result,null,2));process.exitCode=result.repositories.some(r=>['stale','unavailable','unknown'].includes(r.status))?2:0;return;}
@@ -86,17 +90,19 @@ async function main() {
   let dashboard;
   try {dashboard=await startServer({snapshot,webDirectory:join(dirname(fileURLToPath(import.meta.url)),'../web'),port,controller,readiness:readiness?()=>readiness.get():demo?async()=>demoReadiness():undefined});}
   catch(error) {await scheduler?.close();observer?.close();await controller?.close();throw error;}
+  let socket:Awaited<ReturnType<typeof startDashboardSocket>>|undefined;
+  if(headless&&controller){try{socket=await startDashboardSocket(controller.directoryPath(),()=>dashboard.issueLaunchUrl());}catch(error){await dashboard.close();await scheduler?.close();observer?.close();await controller.close();throw error;}}
   scheduler?.start();
   console.log(`Local AI Manage: ${dashboard.origin} (${execute?'managed · dispatch initially follows saved preferences':'observe-only'})`);
   if (open && process.platform==='darwin') {
     const child=spawn('/usr/bin/open',[dashboard.launchUrl],{stdio:'ignore',env:{PATH:'/usr/bin:/bin'}});
     child.once('error',()=>console.error('Browser could not be opened. Restart without --open.'));
-  } else {
+  } else if(!headless) {
     // One-time dashboard-only capability; never worker credentials. Do not redirect/share this output.
     console.log(`One-time login link (expires in 2 minutes): ${dashboard.launchUrl}`);
   }
   let stopping=false;
-  const stop=()=>{if(stopping)return;stopping=true;console.log('Stopping new dispatch; waiting for the current job to finish.');void (scheduler?scheduler.close():Promise.resolve()).then(()=>{observer?.close();return dashboard.close();}).then(()=>controller?.close()).then(()=>process.exit(0)).catch(()=>{console.error('Shutdown incomplete; retained state requires review.');process.exitCode=1;});};
+  const stop=()=>{if(stopping)return;stopping=true;console.log('Stopping new dispatch; waiting for the current job to finish.');void (scheduler?scheduler.close():Promise.resolve()).then(()=>{observer?.close();return dashboard.close();}).then(()=>socket?.close()).then(()=>controller?.close()).then(()=>process.exit(0)).catch(()=>{console.error('Shutdown incomplete; retained state requires review.');process.exitCode=1;});};
   process.on('SIGINT',stop); process.on('SIGTERM',stop);
 }
 main().catch(error=>{if(process.argv.some(arg=>['--recovery-plan','--reconcile','--recovery-resume-plan','--resume-recovery'].includes(arg))){console.error('Recovery did not complete. Check the private attestation, unchanged plan, worker locks and recovery markers. Retained evidence requires review; no worker state or lock is cleared automatically.');process.exitCode=1;return;}void error;console.error('Startup failed. Check registry paths, origin, build and CLI flags. Legacy worker state was not changed.');process.exitCode=1;});
