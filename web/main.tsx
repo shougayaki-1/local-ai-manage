@@ -19,7 +19,7 @@ function Queue({queue,filter}:{queue:QueueSnapshot|undefined;filter:string|null}
 
 const checkLabel=(check:string)=>({'registry':'Repository設定','controller-directory':'管理用保存領域','handoff':'移管確認','recovery':'復旧状況','controller.lock':'管理画面の起動状態','dispatch.lock':'実行予約','enabled':'実行対象設定','state-directory':'worker保存領域','profile':'検証ルール','model':'Model / effort','worker.lock':'workerの起動状態','state-permissions':'保存ファイルの保護','state':'保存状態','profile-state':'再開する作業の互換性','quota':'共有quota','worker-intervention':'人の対応が必要な作業','current':'保存済みの作業','telemetry':'Heartbeat連携','github-auth':'GitHub認証','codex-auth':'Codex認証','process-stop':'停止・自動再起動防止の確認','deployment':'Deployment抑止'}[check]??'保存済み管理情報');
 const findingLabel=(status:string)=>({'pass':'確認済み','blocked':'確認が必要','review-required':'移管時に確認','unavailable':'未取得'}[status]??'未取得');
-function Readiness({report,filter}:{report:ReadinessReport|null;filter:string|null}){const findings=report?.findings.filter(item=>!filter||item.repositoryId===null||item.repositoryId===filter)??[];const producers=report?.producers.filter(item=>!filter||item.repositoryId===filter)??[];return <section id="readiness"><div className="row"><h2>切替前の確認</h2><span>{report?`${findingLabel(report.status)} · ${time(report.checkedAt)} JST`:'未取得'}</span></div><p className="note">保存状態・移管の準備状況を読み取り専用で確認します。実運用への切り替えには、停止と自動再起動防止の確認が必要です。</p>{producers.map(item=><p key={item.repositoryId}><strong>{item.repositoryId.replace('--','/')}</strong> · {item.status==='ready-for-review'?'Heartbeat連携パッチをレビューできます':item.status==='already-present'?'Heartbeat連携sourceを確認済み':item.status==='blocked'?'sourceの差異をレビューしてください':item.status==='unsupported'?'専用profileの確認が必要です':'連携sourceを確認できません'}</p>)}<details><summary>確認項目（{findings.length}件）</summary><div className="tablewrap"><table><thead><tr><th>対象</th><th>確認項目</th><th>結果</th></tr></thead><tbody>{findings.map((item,index)=><tr key={`${item.repositoryId}-${item.check}-${index}`}><td>{item.repositoryId?.replace('--','/')??'全体'}</td><td>{checkLabel(item.check)}</td><td>{findingLabel(item.status)}</td></tr>)}</tbody></table></div></details></section>;}
+function Readiness({report,filter}:{report:ReadinessReport|null;filter:string|null}){const findings=report?.findings.filter(item=>!filter||item.repositoryId===null||item.repositoryId===filter)??[];const producers=report?.producers.filter(item=>!filter||item.repositoryId===filter)??[];return <section id="readiness"><div className="row"><h2>切替前の確認</h2><span>{report?`${findingLabel(report.status)} · ${time(report.checkedAt)} JST`:'未取得'}</span></div><p className="note">保存状態・移管の準備状況を読み取り専用で確認します。実運用への切り替えには、停止と自動再起動防止の確認が必要です。</p>{producers.map(item=><p key={item.repositoryId}><strong>{item.repositoryId.replace('--','/')}</strong> · {item.status==='ready-for-review'?'Heartbeat連携パッチをレビューできます':item.status==='already-present'?'Heartbeat連携sourceを確認済み':item.status==='blocked'?'sourceの差異をレビューしてください':item.status==='unsupported'?'適用できる移植パッチはありません':'連携sourceを確認できません'}</p>)}<details><summary>確認項目（{findings.length}件）</summary><div className="tablewrap"><table><thead><tr><th>対象</th><th>確認項目</th><th>結果</th></tr></thead><tbody>{findings.map((item,index)=><tr key={`${item.repositoryId}-${item.check}-${index}`}><td>{item.repositoryId?.replace('--','/')??'全体'}</td><td>{checkLabel(item.check)}</td><td>{findingLabel(item.status)}</td></tr>)}</tbody></table></div></details></section>;}
 
 function App() {
  const [readiness,setReadiness]=useState<ReadinessReport|null>(null);
@@ -29,6 +29,8 @@ function App() {
  useEffect(()=>{
   const abort=new AbortController(); let timer:ReturnType<typeof setTimeout>|undefined;
   const nonce=location.hash.slice(1); history.replaceState(null,'',location.pathname);
+  const reopen=()=>{if(/^[a-f0-9]{64}$/.test(location.hash.slice(1)))location.reload();};
+  window.addEventListener('hashchange',reopen);
   async function start() {
    if (nonce) {
     const auth=await fetch('/api/session',{method:'POST',headers:{'Content-Type':'application/json','X-Local-Bootstrap':'1'},body:JSON.stringify({nonce}),signal:abort.signal});
@@ -44,7 +46,7 @@ function App() {
    await poll();
   }
   void start().catch(()=>{if(!abort.signal.aborted)setError('ログインリンクが無効または期限切れです。アプリを起動し直してください。');});
-  return ()=>{abort.abort();clearTimeout(timer);};
+  return ()=>{window.removeEventListener('hashchange',reopen);abort.abort();clearTimeout(timer);};
  },[]);
  useEffect(()=>{
   if(lastControl?.application?.status!=='draining')return;

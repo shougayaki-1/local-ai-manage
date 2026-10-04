@@ -1,6 +1,6 @@
 #!/bin/zsh
 set -eu
-export PATH="/Users/shoug/.local/share/fnm/node-versions/v24.12.0/installation/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+export PATH="$HOME/.local/share/fnm/node-versions/v24.12.0/installation/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 cd -- "${0:A:h}"
 service="gui/$(id -u)/local.local-ai-manage.controller"
 if /bin/launchctl print "$service" >/dev/null 2>&1; then
