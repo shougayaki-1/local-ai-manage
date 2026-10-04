@@ -1,5 +1,7 @@
 import { isWorkerProfile, type WorkerProfile } from './profiles.ts';
 import { assertRecoveryClear } from './recovery-guard.ts';
+import { readApprovalGrants } from './approvals.ts';
+import type { Grant } from './approval-policy.ts';
 import { fork } from 'node:child_process';
 import { constants } from 'node:fs';
 import { open, realpath, lstat, unlink, rename } from 'node:fs/promises';
@@ -21,7 +23,7 @@ export function bridgeEnvironment(env:NodeJS.ProcessEnv=process.env):NodeJS.Proc
   const names=['PATH','USER','LOGNAME','SHELL','LANG','LC_ALL','HOME','CODEX_HOME','TMPDIR','GH_TOKEN','GITHUB_TOKEN','GH_CONFIG_DIR','SSH_AUTH_SOCK','DBUS_SESSION_BUS_ADDRESS','XDG_RUNTIME_DIR'];
   return Object.fromEntries(names.filter(name=>typeof env[name]==='string').map(name=>[name,env[name]]));
 }
-export async function runTrustedWorker(repo:Repository,issue:number,profile:WorkerProfile='care-record-v1'):Promise<DispatchOutcome> {
+export async function runTrustedWorker(repo:Repository,issue:number,profile:WorkerProfile='care-record-v1',grants:Grant[]=[]):Promise<DispatchOutcome> {
   if(!isWorkerProfile(profile))throw new Error('unsupported_profile');
   return new Promise((resolve,reject)=>{
     const child=fork(new URL(import.meta.url.endsWith('.ts')?'../engine/care-record/bridge.mjs':'../../engine/care-record/bridge.mjs',import.meta.url),[],{cwd:repo.clonePath,detached:process.platform!=='win32',execArgv:[],env:bridgeEnvironment(),stdio:['ignore','ignore','ignore','ipc']});
@@ -30,7 +32,7 @@ export async function runTrustedWorker(repo:Repository,issue:number,profile:Work
     child.once('error',()=>reject(new Error('worker_completion_unknown')));
     // Successful IPC alone is insufficient; wait for process and stdio closure.
     child.once('close',(code,signal)=>{if(code===0 && !signal && outcome && !invalid)resolve(outcome);else reject(new Error('worker_completion_unknown'));});
-    child.send({version:1,profile,repo:repo.repo,clonePath:repo.clonePath,stateDirectory:repo.stateDirectory,expectedIssue:issue},error=>{if(error)reject(new Error('worker_completion_unknown'));});
+    child.send({version:1,profile,repo:repo.repo,clonePath:repo.clonePath,stateDirectory:repo.stateDirectory,expectedIssue:issue,...(grants.length?{approval:{repositoryId:repo.id,repo:repo.repo,grants}}:{})},error=>{if(error)reject(new Error('worker_completion_unknown'));});
   });
 }
 interface Reservation {version:1;status:'reserved'|'settled';repositoryId:string;issue:number;reservationId:string;outcome:DispatchOutcome|null}
@@ -72,7 +74,8 @@ export async function dispatchOnce({registry,directory,handoff,repositoryId,expe
     }
     const reservation:Reservation={version:1,status:'reserved',repositoryId:repo.id,issue:expectedIssue,reservationId:randomUUID(),outcome:null};
     reserved=true;await persist(root,reservation);
-    const outcome=parseOutcome(await (run??((target,issue)=>runTrustedWorker(target,issue,handoff.profile)))(repo,expectedIssue),expectedIssue);
+    const grants=(await readApprovalGrants(root,registry)).filter(grant=>grant.repositoryId===repo.id&&grant.issue===expectedIssue);
+    const outcome=parseOutcome(await (run??((target,issue)=>runTrustedWorker(target,issue,handoff.profile,grants)))(repo,expectedIssue),expectedIssue);
     // A surviving lock is not treated as a safe completion, even with a successful IPC.
     try{await lstat(join(repo.stateDirectory,'worker.lock'));throw new Error('worker_completion_unknown');}
     catch(error){if(!(error instanceof Error) || !('code' in error) || error.code!=='ENOENT')throw error;}

@@ -2,12 +2,12 @@ import test from 'node:test';
 import { request } from 'node:http';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, symlink, rm, realpath } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { networkInterfaces, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { parseRegistry, loadRegistry } from '../src/registry.ts';
 import { projectState, collectSnapshot, readPrivateJson } from '../src/snapshot.ts';
-import { startServer } from '../src/server.ts';
+import { privateIPv4, tailscaleIPv4, startServer } from '../src/server.ts';
 import type { Repository } from '../src/types.ts';
 const repo:Repository={id:'example--care-record',repo:'example/care-record',clonePath:'/unused/clone',stateDirectory:'/unused/state',enabled:false,ownership:'observe-only',defaultModel:'gpt-6.1-sol',defaultEffort:'medium',maximumConcurrency:1};
 const registry=(r=repo)=>({version:1,globalConcurrency:1,repositories:[r]});
@@ -78,4 +78,49 @@ test('expired nonce fails and concurrent redemption allows only one session',asy
  const login=()=>fetch(`${app.origin}/api/session`,{method:'POST',headers:{Origin:app.origin,'Content-Type':'application/json','X-Local-Bootstrap':'1'},body:JSON.stringify({nonce:new URL(app.launchUrl).hash.slice(1)})});
  now=120_001;assert.equal((await login()).status,403);now=0;
  assert.deepEqual((await Promise.all([login(),login()])).map(r=>r.status).sort(),[200,403]);
+});
+
+test('LAN is opt-in, private-interface-only, authenticated and origin restricted',async t=>{
+ const root=await fixture(t);await writeFile(join(root,'index.html'),'shell');
+ for(const address of ['0.0.0.0','8.8.8.8','localhost','192.168.999.1','::1']) {
+  assert.equal(privateIPv4(address),false);
+  await assert.rejects(startServer({snapshot:async()=>({}) as never,webDirectory:root,lanAddress:address}));
+ }
+ const address=Object.values(networkInterfaces()).flat().find(e=>e?.family==='IPv4'&&!e.internal&&privateIPv4(e.address))?.address;
+ if(!address){t.skip('No private LAN interface');return;}
+ const app=await startServer({snapshot:()=>collectSnapshot(parseRegistry({version:1,globalConcurrency:1,repositories:[]})),webDirectory:root,lanAddress:address});t.after(()=>app.close());
+ assert.ok(app.mobileOrigin);
+ assert.equal((await fetch(app.origin)).status,200);
+ assert.equal((await fetch(app.mobileOrigin!+'/api/status')).status,401);
+ const link=app.issueLaunchUrl(true);assert.equal(new URL(link).origin,app.mobileOrigin);
+ const headers={Origin:app.mobileOrigin!,'Content-Type':'application/json','X-Local-Bootstrap':'1'};
+ const nonce=new URL(link).hash.slice(1);
+ assert.equal((await fetch(app.mobileOrigin!+'/api/session',{method:'POST',headers:{...headers,Origin:app.origin},body:JSON.stringify({nonce})})).status,403);
+ const login=await fetch(app.mobileOrigin!+'/api/session',{method:'POST',headers,body:JSON.stringify({nonce})});assert.equal(login.status,200);
+ const cookie=login.headers.get('set-cookie')!.split(';')[0]!;
+ assert.equal((await fetch(app.mobileOrigin!+'/api/status',{headers:{Cookie:cookie}})).status,200);
+ assert.equal((await fetch(app.mobileOrigin!+'/api/mobile-link',{headers:{Cookie:cookie}})).status,403);
+ const mobile=await fetch(app.origin+'/api/mobile-link',{headers:{Cookie:cookie}});assert.equal(mobile.status,200);assert.equal(new URL((await mobile.json() as {url:string}).url).origin,app.mobileOrigin);
+ assert.equal((await fetch(app.mobileOrigin!+'/api/status',{headers:{Cookie:cookie,Origin:'https://evil.example'}})).status,403);
+ assert.equal(await new Promise<number>(resolve=>{const req=request(app.mobileOrigin!,{headers:{Host:'evil.example'}},res=>{res.resume();resolve(res.statusCode!);});req.end();}),403);
+ assert.equal((await fetch(app.mobileOrigin!+'/api/session',{method:'POST',headers,body:JSON.stringify({nonce})})).status,403);
+});
+
+test('Tailscale listener rejects LAN, wildcard and public addresses before binding',async t=>{
+ const root=await fixture(t);await writeFile(join(root,'index.html'),'shell');
+ for(const address of ['100.64.0.1','100.127.255.254'])assert.equal(tailscaleIPv4(address),true);
+ for(const address of ['100.63.255.255','100.128.0.0','192.168.1.11','0.0.0.0','8.8.8.8','::1','100.64.999.1']){
+  assert.equal(tailscaleIPv4(address),false);
+  await assert.rejects(startServer({snapshot:async()=>({}) as never,webDirectory:root,tailscaleAddress:address}));
+ }
+ await assert.rejects(startServer({snapshot:async()=>({}) as never,webDirectory:root,tailscaleAddress:'100.64.0.1',lanAddress:'192.168.1.1'}));
+});
+
+test('automatic Tailscale setup keeps local dashboard available before VPN login',async t=>{
+ const root=await fixture(t);await writeFile(join(root,'index.html'),'shell');
+ const app=await startServer({snapshot:()=>collectSnapshot(parseRegistry({version:1,globalConcurrency:1,repositories:[]})),webDirectory:root,tailscaleAddress:'auto'});t.after(()=>app.close());
+ assert.equal((await fetch(app.origin)).status,200);
+ if(!app.mobileOrigin)assert.throws(()=>app.issueLaunchUrl(true),/mobile_not_enabled/);
+ const login=await fetch(app.origin+'/api/session',{method:'POST',headers:{Origin:app.origin,'Content-Type':'application/json','X-Local-Bootstrap':'1'},body:JSON.stringify({nonce:new URL(app.launchUrl).hash.slice(1)})});
+ assert.equal(login.status,200);
 });

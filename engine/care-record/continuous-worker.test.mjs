@@ -818,3 +818,39 @@ test('bounded current recovery retains saved session, base and retry budget',asy
  }});assert.equal(ran,true);
  const saved=await loadState(stateDir);assert.equal(saved.current.session,'saved-session');assert.equal(saved.current.failures,1);assert.equal(saved.current.quotaWaits,3);
 });
+
+test('managed continuation parks human work with its session, base and failures while another issue runs',async t=>{
+ const path=await directory(t);const root=join(path,'root');await mkdir(root);const stateDir=join(path,'state');await mkdir(stateDir);
+ const current={number:40,branch:'codex/issue-40-task',worktree:join(stateDir,'worktrees/issue-40'),base:'saved-base',session:'saved-session',failures:1,quotaWaits:2,stage:'implement',result:{status:'needs_human',reasons:[{category:'external_service',check:'build'}]}};
+ await saveJson(join(stateDir,'state.json'),{...emptyState(),repo:'test/repo',status:'needs-human',paused:true,lastReason:'needs_human',current});
+ const calls=[];let ran=false;
+ const state=await worker({config:{...config,stateDir},root,mode:'once',expectedIssue:41,continueAfterHuman:true,now:()=>1000,execute:mockExecute([issue(40),issue(41)],calls),report:()=>{},run:async({current:next})=>{ran=true;assert.equal(next.number,41);return {quota:'window',code:1};}});
+ assert.ok(ran);assert.equal(state.current.number,41);assert.deepEqual(state.humanWaiting,[{current,reason:'needs_human',since:1000}]);
+ assert.equal(state.status,'quota-wait');assert.ok(!calls.some(([,args])=>args.some((arg,index)=>arg==='--remove-label'&&args[index+1]==='codex:needs-human')));
+ const saved=await loadState(stateDir);assert.deepEqual(saved.humanWaiting[0].current,current);
+});
+
+test('managed continuation never clears manual pauses, failed states, quota or a changed candidate',async t=>{
+ for(const variant of ['paused','failed','quota','changed','same']){
+  const path=await directory(t);const root=join(path,'root');await mkdir(root);const stateDir=join(path,'state');await mkdir(stateDir);
+  const state={...emptyState(),repo:'test/repo',status:variant==='paused'?'running':variant==='failed'?'failed':'needs-human',paused:true,nextRetryAt:variant==='quota'?9999:null,current:{number:40,branch:'codex/issue-40-task',worktree:join(stateDir,'worktrees/issue-40'),base:'saved-base',session:'saved-session',failures:1,quotaWaits:2,stage:'implement'}};
+  const raw=JSON.stringify(state);await writeFile(join(stateDir,'state.json'),raw);
+  await worker({config:{...config,stateDir},root,mode:'once',expectedIssue:variant==='same'?40:41,continueAfterHuman:true,now:()=>0,execute:mockExecute([issue(42)],[]),report:()=>{},run:()=>assert.fail('Codex executed')});
+  assert.equal(await readFile(join(stateDir,'state.json'),'utf8'),raw);
+ }
+});
+
+test('waiting human work is excluded even after its GitHub labels are accidentally cleared',async t=>{
+ const path=await directory(t);const root=join(path,'root');await mkdir(root);const stateDir=join(path,'state');await mkdir(stateDir);
+ const waiting={number:40,branch:'codex/issue-40-task',worktree:join(stateDir,'worktrees/issue-40'),base:'base-sha',session:'saved-session',failures:1,quotaWaits:2,stage:'implement'};
+ await saveJson(join(stateDir,'state.json'),{...emptyState(),repo:'test/repo',humanWaiting:[{current:waiting,reason:'needs_human',since:1000}]});
+ const state=await worker({config:{...config,stateDir},root,mode:'once',expectedIssue:41,continueAfterHuman:true,execute:mockExecute([issue(40),issue(41)],[]),report:()=>{},run:async({current})=>{assert.equal(current.number,41);return {quota:'window',code:1};}});
+ assert.equal(state.humanWaiting[0].current.session,'saved-session');assert.equal(state.current.number,41);
+});
+
+test('invalid or duplicate parked work is rejected on restart',async t=>{
+ const path=await directory(t);const current={number:40,branch:'codex/issue-40-task',worktree:'/saved',failures:1,quotaWaits:2,stage:'implement'};
+ for(const humanWaiting of [[{current:{...current,stage:'unknown'},reason:'needs_human',since:1}],[{current,reason:'needs_human',since:1},{current,reason:'needs_human',since:1}],[{current,reason:'needs_human',since:-1}]]){
+  await saveJson(join(path,'state.json'),{...emptyState(),humanWaiting});await assert.rejects(loadState(path),/Invalid worker state/);
+ }
+});

@@ -4,6 +4,16 @@ import { repairDiagnostic, localChecks } from './failure.mjs';
 
 export const emptyState = () => ({ version: 1, repo: null, status: 'idle', current: null, lastReason: null, paused: false, quotaWaitStarted: null, nextRetryAt: null });
 
+function validCurrent(current) {
+  return current && Number.isSafeInteger(current.number) && current.number > 0
+    && /^codex\/issue-\d+-[a-z0-9-]+$/.test(current.branch ?? '') && current.branch.startsWith(`codex/issue-${current.number}-`)
+    && typeof current.worktree === 'string' && Number.isInteger(current.failures) && current.failures >= 0
+    && Number.isInteger(current.quotaWaits) && current.quotaWaits >= 0 && ['prepare', 'implement', 'publish'].includes(current.stage)
+    && (current.repair === undefined || repairDiagnostic(current.repair))
+    && (current.verificationChecks === undefined || (Array.isArray(current.verificationChecks)
+      && current.verificationChecks.every(name => localChecks.includes(name))));
+}
+
 export async function loadState(directory) {
   let state;
   try { state = JSON.parse(await readFile(join(directory, 'state.json'), 'utf8')); }
@@ -12,13 +22,11 @@ export async function loadState(directory) {
     || (state.repo !== null && typeof state.repo !== 'string')
     || (state.nextRetryAt !== null && !Number.isFinite(state.nextRetryAt))
     || (state.quotaWaitStarted !== null && !Number.isFinite(state.quotaWaitStarted))
-    || (state.current && (!Number.isSafeInteger(state.current.number) || state.current.number <= 0
-      || !/^codex\/issue-\d+-[a-z0-9-]+$/.test(state.current.branch ?? '') || !state.current.branch.startsWith(`codex/issue-${state.current.number}-`)
-      || typeof state.current.worktree !== 'string' || !Number.isInteger(state.current.failures) || state.current.failures < 0
-      || !Number.isInteger(state.current.quotaWaits) || state.current.quotaWaits < 0 || !['prepare', 'implement', 'publish'].includes(state.current.stage)
-      || (state.current.repair !== undefined && !repairDiagnostic(state.current.repair))
-      || (state.current.verificationChecks !== undefined && (!Array.isArray(state.current.verificationChecks)
-        || state.current.verificationChecks.some(name => !localChecks.includes(name))))))) {
+    || (state.current && !validCurrent(state.current))
+    || (state.humanWaiting !== undefined && (!Array.isArray(state.humanWaiting) || state.humanWaiting.length > 256
+      || state.humanWaiting.some(entry => !entry || !validCurrent(entry.current) || typeof entry.reason !== 'string'
+        || !Number.isSafeInteger(entry.since) || entry.since < 0 || entry.current.number === state.current?.number)
+      || new Set(state.humanWaiting.map(entry => entry.current.number)).size !== state.humanWaiting.length))) {
     throw new Error('Invalid worker state; manual recovery required');
   }
   return state;

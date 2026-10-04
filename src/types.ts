@@ -15,10 +15,12 @@ export interface Job {
   failures: number | null; quotaWaits: number | null;
   model: string | null; effort: string | null;
   reasonCategories: string[]; check: string | null; prUrl: string | null;
+  approvals?: {reason:string;status:'missing'|'approved'|'stale';approvable:boolean}[];
 }
 export interface RepoSnapshot {
   id: string; repo: string; enabled: boolean; ownership: 'observe-only'|'managed';
   status: string; paused: boolean | null; current: Job | null;
+  humanWaiting?: {job:Job;reason:string;since:string}[];
   defaultModel: string; defaultEffort: string;
   quota: { status: 'waiting'|'unknown'; nextRetryAt: string | null; startedAt: string | null };
   stateUpdatedAt: string | null; heartbeat: {at:string;status:'updating'|'stale'|'stopped';source?:'managed-controller'} | null;
@@ -31,6 +33,7 @@ export interface Snapshot {
   controller: ControllerView;
   repositories: RepoSnapshot[];
   queue: QueueSnapshot;
+  approvalRevision?:number;
 }
 
 export interface QueueItem {
