@@ -1,5 +1,7 @@
 # Build / Issue #55の停止原因解消
 
+現在の2repo稼働・実dispatch・遠隔status更新は完了済みです。最新状態は [運用手順](live-operation.md) を参照してください。以下は機能説明または準備時点の履歴です。
+
 2026-10-04 Asia/Tokyo。
 
 ## Buildの確認

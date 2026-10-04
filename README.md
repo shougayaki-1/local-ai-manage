@@ -1,6 +1,8 @@
 # Local AI Manage
 
-Mac上のCodex Continuous Workerを、既存stateを変更せずに観測するlocal dashboard。
+Mac上のCodex Continuous Workerを複数repositoryで管理するlocal dashboard。
+
+このMacの運用移管・実行検証は完了しています。起動・停止・遠隔statusの最新手順は [運用手順](docs/live-operation.md) を参照してください。
 初期状態ではworkerに対して **observe-only** です。controllerのdispatch設定はGUIから保存できます。明示的な移管設定と `--execute` を揃えた場合だけ、schedulerが固定workerを1件ずつ実行します。通常のlauncherは観測のみです。`--github`でGitHub queueの読み取りを接続できます。
 
 ## 起動
@@ -35,7 +37,7 @@ npm start -- --registry registry.local.json --github --status
 
 ## Controller設定
 
-GUIで全体Pause/Resume、repositoryごとのPause/Resume・Enable/Disableを保存できます。**既定の起動では設定保存のみ**です。`--execute`で明示的に移管設定を接続した起動では、schedulerの次のdispatchへ適用します。このMacでは専用producerとmanaged controller/handoffを準備し、全体/repo PauseでGUI接続を確認済みです。実dispatchは未実施です。GUI操作はneeds-human、workerのpaused、failure counter、session、quota、GitHub labelを直接変更しません。managed workerの通常処理は既存契約に従ってstate/labelを更新します。
+GUIで全体Pause/Resume、repositoryごとのPause/Resume・Enable/Disableを保存できます。**既定の起動では設定保存のみ**です。`--execute`で明示的に移管設定を接続した起動では、schedulerの次のdispatchへ適用します。このMacでは2repoの移管と実dispatchを完了し、全体/repo Resumeで通常待機しています。GUI操作はneeds-human、workerのpaused、failure counter、session、quota、GitHub labelを直接変更しません。managed workerの通常処理は既存契約に従ってstate/labelを更新します。
 
 初回は全体およびrepositoryがPausedです。独立保存領域は `~/.local/state/local-ai-manage`。別pathは `--controller-state /absolute/private/directory` で指定できます（親directoryは事前作成）。clone/worker stateと重なるpath、symlink、他ユーザー所有、group/worldアクセス可能なdirectoryは拒否します。directoryは0700、ファイルは0600。demoおよびCLI `--status` はcontrollerを開かず、worker観測だけを返します。
 
@@ -43,7 +45,7 @@ GUIで全体Pause/Resume、repositoryごとのPause/Resume・Enable/Disableを�
 
 保存は単一write lane、0600一時ファイルのsync→rename→directory sync。保存結果が不明なら以後のwriteを拒否します。履歴は最大1024操作で、上限時は新規操作を拒否し、IDの重複防止記録を勝手に破棄しません。起動時はschema、registry topology、履歴revisionと設定の整合を検証します。
 
-`controller.lock`はexclusive作成し、自動で奪取しません。異常終了後のlockは、**このdashboard processが終了していることを確認してから**管理者が対応してください。worker.lock/stateを消す操作ではありません。起動中のdashboardへの再起動や二重起動は失敗します。
+`controller.lock`はexclusive作成し、自動で奪取しません。異常終了後のlockは、**このdashboard processが終了していることを確認してから**管理者が対応してください。worker.lock/stateを消す操作ではありません。別controllerの二重起動は失敗します。Managed launcherは起動済みserviceのprivate socketから新しい認証リンクを取得します。
 
 HTTP操作には認証cookie、厳密なOrigin、JSON、session固有CSRF tokenが必要です。操作は30回/分、readは120回/分に制限。異常stateやstale lockを修復・削除するAPIはありません。
 
@@ -70,7 +72,7 @@ API: GET `/api/status`, `/api/repositories`, `/api/repositories/:id/status`, `/a
 
 GitHub認証は既存gh/OS keyringを再利用し、必要時だけgh subprocessに限定したGitHub環境を渡します。tokenを取り出したり設定へ保存したりしません。CODEX_HOME/API key/Supabase key/GH_DEBUG/NODE_OPTIONSはghに渡しません。Issue本文はmetadata解析のため一時的に取得しますが、cache・API・GUI・ログには保存しません。GET固定endpoint以外をadapterは拒否します。
 
-同一OSユーザーによる攻撃を完全隔離するsandboxではありません。専用workerユーザー/cloneと既存sandbox/credential isolationを維持してください。LAN公開・Tailscale・Tauri・LaunchAgent登録は未実装です。
+同一OSユーザーによる攻撃を完全隔離するsandboxではありません。専用workerユーザー/cloneと既存sandbox/credential isolationを維持してください。LAN公開・Tailscale・Tauriは将来の対応範囲です。このMacのcontroller/status LaunchAgentは登録済みです。
 
 ## 検証
 
@@ -93,20 +95,20 @@ git diff --check
 
 - workerは `engine/care-record` に取り込んだ固定artifactを呼びます。登録clone内のworkerスクリプトを実行しません。standalone CLI入口は取り除き、bridgeはIPCの固定schemaのみを受けます。
 - care-record-v1とlocal-ai-manage-v1を実装。package名・exact scripts・保護対象をprofileごとに照合し、GPT-6.1 Sol / mediumを固定。詳細は[profile一覧](docs/profiles.md)。Issue metadataによるmodel/effort overrideは未実装です。
-- 内部 `dispatchOnce` はcanonical registry、private ledger directory、登録repo id、正のexpectedIssue、明示的handoff attestationを要求。registryのenabledもtrueである必要があります。現在のlocal registryはfalseのままです。
-- handoffの `standaloneStopped: true / scope: all-registered-workers` は、管理者が登録全repoのstandalone worker・Codex子processが終了し、再起動しない状態へ移管したことの申告です。lock不在から自動推測しません。GUIからこの申告を作るAPIはありません。実際の移管はまだ行っていません。
+- 内部 `dispatchOnce` はcanonical registry、private ledger directory、登録repo id、正のexpectedIssue、明示的handoff attestationを要求。registryのenabledもtrueである必要があります。観測用registryはfalseのまま、別のlive registryでは登録2repoをtrueにしています。
+- handoffの `standaloneStopped: true / scope: all-registered-workers` は、管理者が登録全repoのstandalone worker・Codex子processが終了し、再起動しない状態へ移管したことの申告です。lock不在から自動推測しません。GUIからこの申告を作るAPIはありません。このMacでは登録2repoの停止確認と移管を実施済みです。
 - 全体exclusive `dispatch.lock` と、実行前にsync保存する `dispatch.json` reservation。異常終了・不正IPC・生存worker.lock・保存結果不明ならlock/reservationを保持して再実行を止めます。人による確認に基づくoffline rotation/replayはdocs/recovery.mdを参照してください。
 - quota待機は前回adapter結果と全登録worker stateから検査。future nextRetryAt、期限不明のquota待機では他repoも起動しません。schedulerもshared quota gateと期限を永続化し、repository間をround-robinで選びます。
 - expectedIssueとsaved currentが違えばworkerを進めません。saved needs-human/failed/pausedも解除せず、session/base/failures/quotaWaitsを維持します。session resume非対応時は保存sessionを捨てず人の確認へ止めます。
 - 新規claimでは最新queue候補、fresh Issue、再取得した依存/関連PRを確認。候補変更や未確認なら実行しません。GitHub上のclaimは原子的ではないため、exclusive ownershipが必須です。
 - parent verification、credential isolation、sandbox、finite self-repair、E2E禁止、DB/RLS等の境界、Draft-only publicationは取り込んだworkerのままです。bridge stdout/stderrはGUIへ渡さず、終了結果は固定schemaで投影します。
 
-出典と取り込み差分は [engine/care-record/PROVENANCE.md](engine/care-record/PROVENANCE.md)。検証はfake Git/Codex/GitHubと一時worktreeを使用し、live dispatchやGitHub label変更は実施しません。
+出典と取り込み差分は [engine/care-record/PROVENANCE.md](engine/care-record/PROVENANCE.md)。自動回帰はfake Git/Codex/GitHubと一時worktreeを使用します。別途、2repoの実dispatchからDraft PRまで検証済みです。
 
 
 ## Managed scheduler（運用移管後のみ）
 
-`--execute --github --registry ...` でschedulerを接続します。demoやCLI `--status`との併用は拒否します。**現在のCareRecordへの運用移管は未実施なので、このflagを通常launcherには加えていません。** 移管はstandalone writer/Codex子processの終了確認と再起動防止が必要な別作業です。
+`--execute --github --registry ...` でschedulerを接続します。demoやCLI `--status`との併用は拒否します。このMacのManaged launcher/serviceは移管済みのlive registryでこのflagを使用します。通常Launch.commandは観測のみです。 移管はstandalone writer/Codex子processの終了確認と再起動防止が必要な別作業です。
 
 必要な条件:
 
@@ -136,7 +138,7 @@ cursor・実行予約・cooldown・quota期限は0700 controller directoryの060
 
 Ctrl+C/SIGTERMは新規dispatchを止め、現在jobの完了を待ちます。trusted bridgeは別process groupで動くため、TerminalのCtrl+Cが子workerを直接終了させません。強制終了やOS再起動ではorphan確認が必要です。dashboard終了中もreceipt/statusで完了待ちを表示できます。
 
-heartbeat／CLI起動model・effort／sanitized eventsを実装済みです。offline controller復旧CLIも実装済みです。復旧途中のjournal replayとlocal-ai-manage profileも実装済みです。このMacでは旧workerの自動起動停止、専用producer適用、Pause状態のmanaged設定まで実施済みです。残る作業は限定live dispatch、remote statusの有効化、追加repoの登録と検証です。
+heartbeat／CLI起動model・effort／sanitized eventsを実装済みです。offline controller復旧CLIも実装済みです。復旧途中のjournal replayとlocal-ai-manage profileも実装済みです。このMacでは旧workerの自動起動停止、専用producer適用、2repoの実dispatchとDraft PR、remote statusの実更新まで完了しています。
 
 ### Worker telemetry
 
@@ -163,11 +165,11 @@ npm start -- --registry registry.local.json --remote-status --github
 
 `--preflight`は移管準備の診断です。停止の証明や実行許可には使いません。`--github`付きでは固定gh auth statusだけで認証を確認します。CodexのChatGPT login・CLI互換性、実process停止・自動再起動防止は人の確認事項です。問題ありはexit 2、確認事項が残る通常診断はexit 0で、authorizesDispatchは常にfalseです。
 
-`--remote-status`はCareRecord Issue #73のmarkerとheartbeat timestampを使ったコメント本文previewをJSONで出力します。このpreviewコマンドではGitHubへ投稿しません。固定comment publisherとActions用テンプレートは後述のopt-in経路で実装済みですが、専用Issue作成・実投稿・Actions有効化は未実施です。旧workerに有効なsidecarがなければheartbeatはunknown、quotaがないだけでavailableとは表示しません。詳細は[接続・点検手順](docs/connection.md)。
+`--remote-status`はCareRecord Issue #73のmarkerとheartbeat timestampを使ったコメント本文previewをJSONで出力します。このpreviewコマンドではGitHubへ投稿しません。固定comment publisherとActions用テンプレートは後述のopt-in経路です。このMacでは2repoの専用IssueとActions sole writerを有効化し、実更新を確認済みです。旧workerに有効なsidecarがなければheartbeatはunknown、quotaがないだけでavailableとは表示しません。詳細は[接続・点検手順](docs/connection.md)。
 
 ## 固定コメントpublisherと独立監視
 
-opt-in `--status-publisher /private/status`（registryと--github必須）で管理者が指定した固定コメントだけを更新します。通常launcher/GUIから起動しません。`--status-monitor /private/status`はread-onlyで15分staleを判定します。Actions用の無効テンプレートと独立scriptも用意しました。直接publisherではコメント自体のstale書換を行わず、独立監視のexit statusで通知します。同一コメントのstale自動表示には後述のActions sole writerを選べます。実投稿/cron登録は未実施。詳細は[status更新・監視手順](docs/publishing.md)。
+opt-in `--status-publisher /private/status`（registryと--github必須）で管理者が指定した固定コメントだけを更新します。通常launcher/GUIから起動しません。`--status-monitor /private/status`はread-onlyで15分staleを判定します。Actions用の無効テンプレートと独立scriptも用意しました。直接publisherではコメント自体のstale書換を行わず、独立監視のexit statusで通知します。同一コメントのstale自動表示には後述のActions sole writerを選べます。このMacでは後述のActions sole writerで実投稿・cron登録済みです。詳細は[status更新・監視手順](docs/publishing.md)。
 
 ## 旧CareRecord producerの移植準備
 
@@ -175,14 +177,14 @@ opt-in `--status-publisher /private/status`（registryと--github必須）で管
 
 GUIの「切替前の確認」は認証済みのread-only `/api/readiness`で、保存状態の診断とproducer bundle照合を表示します。30秒cacheを使い、GUI自身のcontroller lockを識別します。表示から移管やdispatchを許可する経路はありません。
 
-同一コメント上のstale自動表示には `--status-actions /absolute/private/status`を用意しました。Mac側は固定workflowへsanitized observationを送信し、Actionsが更新・監視を同じ直列laneで処理します。逆順eventは観測時刻で拒否します。テンプレートは未有効化で、直接publisherとの併用は不可です。詳細は[status更新・監視手順](docs/publishing.md)。
+同一コメント上のstale自動表示には `--status-actions /absolute/private/status`を用意しました。Mac側は固定workflowへsanitized observationを送信し、Actionsが更新・監視を同じ直列laneで処理します。逆順eventは観測時刻で拒否します。配布用テンプレートはexampleのまま、このMacの2repoではレビュー済みworkflowを有効化しました。直接publisherとの併用は不可です。詳細は[status更新・監視手順](docs/publishing.md)。
 
-現在の要件・検証結果は[確認記録](docs/acceptance-review.md)、buildと#55の修正結果・残作業は[停止原因解消記録](docs/resolution-record.md)にまとめています。
+最新の運用・検証結果は[運用手順](docs/live-operation.md)にまとめています。[確認記録](docs/acceptance-review.md)と[停止原因解消記録](docs/resolution-record.md)は準備時点の履歴です。
 
 ## このMacの管理設定（2026-10-04）
 
-旧 `local.care-record.codex-worker` は停止済み状態を確認して自動起動を無効化・登録解除しました。専用cloneへproducer bundleを適用済みです。元stateとIssue履歴、session/worktree、deployment/verification sourceは維持しています。
+デスクトップの「Local AI Manage.command」、または [Managed-Launch.command](Managed-Launch.command) を開いてください。起動済みserviceへ認証して管理画面を開きます。privateな `registry.live.local.json` を使い、CareRecordとlocal-ai-manageがEnabled / Resumed、全体もResumedで実行候補を待っています。同時実行は全体1件、既定はGPT-6.1 Sol / mediumです。
 
-`Managed-Launch.command`をダブルクリックすると、git対象外の `registry.managed.local.json` とprivate managed controllerを使います。通常の `Launch.command` は引き続きobserve-onlyです。管理設定は全体・repoともPause、Issue #55もneeds-human/pausedのままです。Resume操作は#55の人待ちを解除しません。再起動では保存したcontrol設定が引き継がれるため、Resume後は起動時の状態を確認してください。
+controllerとstatusはログイン時にLaunchAgentで起動します。旧CareRecord standalone agentは無効化・登録解除済みです。元state、Issue履歴、session/worktreeと移管前backupは保持しています。GUIを閉じてもserviceは継続します。停止する場合はGUIのPause dispatchで新規実行を止め、実行中jobの完了を待ちます。
 
-clone側worker 103件・typecheck・lintは成功。buildは既存workerと同じCI合成環境でclone/#55 worktreeとも成功しました。#55の削除順序と同期未完了UIも修正し、unit 516件・typecheck・lint・buildを検証済みです。本番資格情報は移植していません。実Codex/PR publication trial、Status workflow有効化・実投稿は未実施です。
+実workerでCareRecord [Draft PR #75](https://github.com/shougayaki-1/care-record/pull/75)、local-ai-manage [Draft PR #3](https://github.com/shougayaki-1/local-ai-manage/pull/3) を作成しました。業務変更のmergeは人がレビューします。遠隔statusは両repoの専用固定コメントをActionsが更新・監視しています。詳しい操作と検証証跡は [運用手順](docs/live-operation.md) を参照してください。

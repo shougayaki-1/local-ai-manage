@@ -1,5 +1,7 @@
 # 実装と実運用の確認記録
 
+現在の2repo稼働・実dispatch・遠隔status更新は完了済みです。最新状態は [運用手順](live-operation.md) を参照してください。以下は機能説明または準備時点の履歴です。
+
 更新: buildはworkerの正規CI合成環境で成功し、#55のGoogle-first問題もworktreeで修正・検証した。最新の結果は [停止原因解消記録](resolution-record.md) を参照。以下の過去の失敗記録は環境未指定の単独buildについてのもの。
 
 更新: ユーザー承認後にこのMacの停止・再起動防止、専用producer適用、Pause状態の管理設定を実施した。以下には準備時点の記録も含む。現在の運用状態とbuild制約は [運用移管記録](operation-record.md) を正本とする。

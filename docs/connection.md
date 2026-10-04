@@ -1,5 +1,7 @@
 # CareRecord接続と移管前点検
 
+現在の2repo稼働・実dispatch・遠隔status更新は完了済みです。最新状態は [運用手順](live-operation.md) を参照してください。以下は機能説明または準備時点の履歴です。
+
 2026-10-03。local-ai-manage内だけの実装。CareRecordの稼働source/state/LaunchAgentを変更しない。
 
 ## 既存workerの観測
