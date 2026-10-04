@@ -1,0 +1,40 @@
+name: Codex Worker human review mention
+on:
+  workflow_dispatch:
+    inputs:
+      payload:
+        description: Sanitized human review event
+        required: true
+        type: string
+permissions:
+  contents: read
+  issues: write
+concurrency:
+  group: codex-worker-attention-writer
+  cancel-in-progress: false
+jobs:
+  notify:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Read fixed notification script
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REF: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_REF" =~ ^[a-f0-9]{40}$ ]]
+          mkdir -p engine
+          gh api "repos/$GITHUB_REPOSITORY/contents/engine/attention-writer.mjs?ref=$SOURCE_REF" --jq .content | base64 --decode > engine/attention-writer.mjs
+      - name: Mention reviewer once per event
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ATTENTION_USER: ${{ vars.CODEX_WORKER_MENTION_USER }}
+          ATTENTION_PAYLOAD: ${{ inputs.payload }}
+        run: node engine/attention-writer.mjs
