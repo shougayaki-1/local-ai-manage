@@ -48,8 +48,8 @@ async function main() {
     else throw new Error('invalid_flags');
   }
   if(headless&&(!execute||!controlDirectory||open||demo||publisherDirectory||monitorDirectory||status||check||remoteStatus||recoveryTarget))throw new Error('invalid_headless');
-  if(producerReview&&(publisherDirectory||monitorDirectory||demo||open||status||execute||check||remoteStatus||recoveryTarget||attestationPath||port!==0||github||!config))throw new Error('producer_plan_flags_invalid');
-  if(publisherDirectory||monitorDirectory){if(demo||open||status||execute||check||remoteStatus||controlDirectory||recoveryTarget||attestationPath||port!==0||monitorDirectory&&(config||github||controlDirectory)||publisherDirectory&&(!config||!github))throw new Error('status_service_flags_invalid');}
+  if(producerReview&&(publisherDirectory||monitorDirectory||demo||open||status||execute||check||remoteStatus||controlDirectory||recoveryTarget||attestationPath||port!==0||github||!config))throw new Error('producer_plan_flags_invalid');
+  if(publisherDirectory||monitorDirectory){if(demo||open||status||execute||check||remoteStatus||recoveryTarget||attestationPath||port!==0||monitorDirectory&&(config||github||controlDirectory)||publisherDirectory&&(!config||!github))throw new Error('status_service_flags_invalid');}
   if(monitorDirectory){const result=await monitorStatus(await loadStatusTargets(monitorDirectory));console.log(JSON.stringify(result,null,2));process.exitCode=result.repositories.some(r=>['stale','unavailable','unknown'].includes(r.status))?2:0;return;}
   if((check||remoteStatus)&&(demo||open||execute||status||recoveryTarget||attestationPath||port!==0||!config||check&&remoteStatus||check&&!controlDirectory||remoteStatus&&controlDirectory))throw new Error('diagnostic_flags_invalid');
   if (demo && config) throw new Error('choose_one_source');
