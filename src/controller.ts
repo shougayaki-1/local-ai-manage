@@ -90,6 +90,7 @@ export class Controller {
   }
   attachRuntime(runtime:NonNullable<Controller['runtime']>):void {if(this.runtime)throw new ControlError('runtime_already_connected');this.runtime=runtime;}
   directoryPath():string {return this.directory;}
+  storageUncertain():void {this.writable=false;}
   async dispatchGate<T>(work:(view:ControllerView)=>Promise<T>):Promise<T> {
     const pending=this.lane.then(()=>{if(this.closed||!this.writable)throw new ControlError('controller_unavailable',503);return work(this.view());});
     this.lane=pending.then(()=>{},()=>{});return pending;

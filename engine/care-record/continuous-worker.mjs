@@ -1,5 +1,7 @@
 import { readSuppressedDeployment, branchSuppressionOnly, PublicationSafetyError } from './lib/publication.mjs';
-import { assertProfileId, assertManagerCheck, managerProtected, ProfileBindingError } from './profiles.mjs';
+import { assertProfileId, assertManagerCheck, ProfileBindingError } from './profiles.mjs';
+import { parseGrant, pendingReasons, changedFiles, protectedReasons, issueBinding, diffBinding, requireApprovals, HumanApprovalError } from './lib/human-approval.mjs';
+import { runApprovedE2e, assertE2ePlan } from './lib/approved-e2e.mjs';
 import { assertProfile } from './profile.mjs';
 import { homedir } from 'node:os';
 import { resolve, join, relative, isAbsolute, dirname, basename, sep } from 'node:path';
@@ -50,22 +52,23 @@ async function canonicalPath(path) {
   }
 }
 
-export async function verify(current, execute, profile='care-record-v1') {
+export async function verify(current, execute, profile='care-record-v1', approval) {
   assertProfileId(profile);
   await ensureWorktree(current, current.worktree, execute);
   const run = args => execute('git', args, { cwd: current.worktree });
   const beforeHead = await run(['rev-parse', 'HEAD']);
   if (await run(['branch', '--show-current']) !== current.branch) throw new WorktreeSafetyError('worktree_branch_mismatch');
   const beforeChecks = await run(['status', '--porcelain']);
-  const changed = (await run(['diff', '--name-status', '--no-renames', current.base])).split('\n').filter(Boolean);
-  const untracked = (await run(['ls-files', '--others', '--exclude-standard'])).split('\n').filter(Boolean);
-  changed.push(...untracked.map(path => `A\t${path}`));
-  if(profile==='local-ai-manage-v1'&&managerProtected(changed))throw new Error('Controller/security change requires human verification');
+  const changed = await changedFiles(current, execute);
   if (!changed.length) throw new Error('No implementation changes');
   if (changed.some(line => /^(?!A\s)\S+\s+supabase\/migrations\//.test(line) || /\s+supabase\/migrations\/old\//.test(line) || /\s+(?:.*\/)?(?:\.env(?!\.example$)|auth\.json|WORKER-PROGRESS\.md|.*\.pem$)/.test(line))) throw new Error('Protected file changed');
-  // DB/RLS changes never reach test commands or publication automatically.
-  if (changed.some(line => /\s+(?:supabase\/migrations\/|src\/utils\/permissions\.ts)/.test(line))) throw new Error('DB/RLS change requires human verification before publishing');
-  if (changed.some(line => /\s+(?:src\/(?:app\/auth\/|components\/auth\/|utils\/supabase\/|utils\/.*(?:[Aa]uth|[Pp]ermission|[Tt]enant|[Rr]etention)|proxy\.ts)|scripts\/(?:db|e2e)\/|supabase\/)/.test(line))) throw new Error('Security-sensitive change requires human verification');
+  const humanReasons = [...new Set([...await protectedReasons(current, execute, profile), ...pendingReasons(current).filter(reason => !['sandbox_capability', 'local_verification'].includes(reason))])];
+  let approvedDiff;
+  if (humanReasons.length) {
+    if (!approval) throw new HumanApprovalError(humanReasons);
+    approvedDiff = await diffBinding(current, execute);
+    requireApprovals(approval.grants, approval.repositoryId, approval.repo, current.number, humanReasons, { issue: issueBinding(await approval.issue()), diff: approvedDiff });
+  }
   const deploymentConfig=profile==='care-record-v1'?await readSuppressedDeployment(current.worktree,current.branch):null;
   if(changed.some(line=>/\s+vercel\.json$/.test(line))){if(profile!=='care-record-v1'||!branchSuppressionOnly(JSON.parse(await run(['show',`${current.base}:vercel.json`])),deploymentConfig,current.branch))throw new Error('Deployment configuration change requires human verification');}
   let scripts = null;
@@ -79,6 +82,8 @@ export async function verify(current, execute, profile='care-record-v1') {
   // Validate the entire plan before executing any script, including hooks.
   if(profile==='local-ai-manage-v1')await assertProfile(current.worktree,profile);
   for (const name of names) (profile==='care-record-v1'?assertLocalCheck:assertManagerCheck)(scripts, name);
+  const e2e = humanReasons.includes('manual_e2e') ? approval.grants.find(grant => grant.issue === current.number && grant.reason === 'manual_e2e')?.e2e : null;
+  if (e2e) await assertE2ePlan(current.worktree, scripts, profile, e2e);
   // A repaired Codex result must not drop checks delegated by an earlier result.
   current.verificationChecks = [...names, 'diff-check'];
   for (const name of names) {
@@ -89,23 +94,43 @@ export async function verify(current, execute, profile='care-record-v1') {
       throw new VerificationFailure(name, error);
     }
   }
+  if (e2e) {
+    requireApprovals(approval.grants, approval.repositoryId, approval.repo, current.number, humanReasons, { issue: issueBinding(await approval.issue()), diff: await diffBinding(current, execute) });
+    await runApprovedE2e(current, scripts, profile, e2e, execute);
+  }
   try { await run(['diff', '--check', current.base]); }
   catch (error) { throw new VerificationFailure('diff-check', error); }
   const afterChecks = await run(['status', '--porcelain']);
   if (beforeHead !== await run(['rev-parse', 'HEAD']) || beforeChecks !== afterChecks) throw new Error('Verification changed worktree files');
   if(profile==='care-record-v1'&&JSON.stringify(await readSuppressedDeployment(current.worktree,current.branch))!==JSON.stringify(deploymentConfig))throw new PublicationSafetyError();
+  if (approvedDiff) {
+    requireApprovals(approval.grants, approval.repositoryId, approval.repo, current.number, humanReasons, { issue: issueBinding(await approval.issue()), diff: await diffBinding(current, execute) });
+  }
   if (afterChecks) {
     await run(['add', '--all', '--', '.']);
     await run(['commit', '-m', `Implement issue #${current.number}`]);
   }
   if (Number(await run(['rev-list', '--count', `${current.base}..HEAD`])) < 1) throw new Error('No implementation commit');
   if (await run(['status', '--porcelain'])) throw new Error('Verification changed tracked files');
-  return ['npm run typecheck', 'npm run lint -- --max-warnings=0', ...tests.map(name => `npm run ${name}`), 'git diff --check'];
+  const verified = ['npm run typecheck', 'npm run lint -- --max-warnings=0', ...tests.map(name => `npm run ${name}`), ...(e2e ? ['approved local E2E (retries=0)'] : []), 'git diff --check'];
+  if (approvedDiff) {
+    const after = await diffBinding(current, execute);
+    // The parent's own commit may change HEAD, but may not change reviewed bytes.
+    if (after.base !== approvedDiff.base || after.diffDigest !== approvedDiff.diffDigest) throw new HumanApprovalError(humanReasons, 'stale');
+    verified.approvalBinding = after; verified.humanReasons = humanReasons;
+  }
+  return verified;
 }
 
-export async function worker({ config, mode = 'normal', resume = false, expectedIssue, root = process.cwd(), execute = command, run = runCodex, now = Date.now, wait = sleep, signal, report = console.log, telemetry, profile='care-record-v1' }) {
+export async function worker({ config, mode = 'normal', resume = false, expectedIssue, continueAfterHuman = false, approval, root = process.cwd(), execute = command, run = runCodex, now = Date.now, wait = sleep, signal, report = console.log, telemetry, profile='care-record-v1' }) {
   assertProfileId(profile);
   if (expectedIssue !== undefined && (!Number.isSafeInteger(expectedIssue) || expectedIssue <= 0 || mode !== 'once' || resume)) throw new Error('Invalid bounded dispatch');
+  if (continueAfterHuman && (expectedIssue === undefined || mode !== 'once' || resume)) throw new Error('Continuation requires bounded dispatch');
+  if (approval) {
+    if (expectedIssue === undefined || mode !== 'once' || resume || !Array.isArray(approval.grants) || approval.grants.length > 256) throw new Error('Invalid approval dispatch');
+    approval = { repositoryId: approval.repositoryId, repo: approval.repo, grants: approval.grants.map(parseGrant) };
+    if (approval.grants.some(grant => grant.repositoryId !== approval.repositoryId || grant.repo !== approval.repo || grant.issue !== expectedIssue)) throw new Error('Invalid approval scope');
+  }
   const originalExecute = execute;
   execute = (binary, args, options) => originalExecute(binary, args, { ...options, signal });
   config = { ...config, stateDir: await canonicalPath(config.stateDir) };
@@ -122,13 +147,15 @@ export async function worker({ config, mode = 'normal', resume = false, expected
   const remote = await execute('git', ['remote', 'get-url', 'origin'], { cwd: root });
   const repo = remote.match(/^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?$/)?.[1];
   if (!repo || (config.repo && config.repo !== repo)) throw new Error('Origin must match the configured GitHub repository');
+  if (approval && approval.repo !== repo) throw new Error('Invalid approval repository');
   const github = new GitHub(repo, execute);
+  if (approval) approval.issue = () => github.issue(expectedIssue);
   let state = await loadState(config.stateDir);
   if (state.repo && state.repo !== repo) throw new Error('Saved state belongs to another repository');
   const persist = async () => { await saveJson(join(config.stateDir, 'state.json'), state); await telemetry?.update(state); };
   if (mode === 'dry-run') {
     const snapshot = await github.snapshot();
-    const issue = state.current ? await github.issue(state.current.number) : selectIssue(snapshot.issues, snapshot.dependencies, snapshot.linked);
+    const issue = state.current ? await github.issue(state.current.number) : selectIssue(snapshot.issues, snapshot.dependencies, new Set([...snapshot.linked, ...(state.humanWaiting ?? []).map(entry => entry.current.number)]));
     const current = state.current ?? (issue ? { number: issue.number, branch: branchName(issue), worktree: join(config.stateDir, 'worktrees', `issue-${issue.number}`) } : null);
     const preflight = issue ? preflightReason(issue.body) : null;
     report(JSON.stringify({ mode, issue: issue?.number ?? null, dependencies: issue ? metadataForReport(issue) : [], branch: current?.branch ?? null, status: state.status, nextRetryAt: state.nextRetryAt, paused: state.paused, preflight,
@@ -144,11 +171,42 @@ export async function worker({ config, mode = 'normal', resume = false, expected
     if(state.profile!==undefined&&state.profile!==profile)throw new ProfileBindingError('Saved worker profile mismatch');
     if(profile!=='care-record-v1'&&state.current&&state.profile===undefined)throw new ProfileBindingError('Saved work requires a reviewed profile binding');
     if(profile!=='care-record-v1')state.profile=profile;
-    if (expectedIssue !== undefined && state.current && state.current.number !== expectedIssue) return state;
-    if (expectedIssue !== undefined && ['needs-human','failed'].includes(state.status)) return state;
+    const waitingNumbers = new Set((state.humanWaiting ?? []).map(entry => entry.current.number));
+    const approvalResume = !!approval?.grants.length && (state.status === 'needs-human' && state.paused && state.current?.number === expectedIssue
+      || waitingNumbers.has(expectedIssue) && !state.current && state.status === 'idle' && state.paused === false && state.nextRetryAt === null);
+    if (approvalResume && waitingNumbers.has(expectedIssue)) {
+      if (state.current) return state; // Preserve active work; do not overwrite it.
+      const entry = state.humanWaiting.find(item => item.current.number === expectedIssue);
+      state.current = entry.current; state.status = 'needs-human'; state.paused = true; state.lastReason = entry.reason;
+      state.humanWaiting = state.humanWaiting.filter(item => item !== entry);
+    }
+    // Park only a confirmed issue-level human stop, inside the existing worker lock.
+    // A quota wait, manual pause, failed state or an unknown worktree is never cleared.
+    const parking = continueAfterHuman && state.status === 'needs-human' && state.paused === true
+      && state.current && state.current.number !== expectedIssue && state.nextRetryAt === null
+      && ['prepare', 'implement', 'publish'].includes(state.current.stage);
+    if (waitingNumbers.has(expectedIssue) && !approvalResume) return state;
+    if (!parking && expectedIssue !== undefined && state.current && state.current.number !== expectedIssue) return state;
+    if (!parking && !approvalResume && expectedIssue !== undefined && ['needs-human','failed'].includes(state.status)) return state;
+    if (state.paused && !resume && !parking && !approvalResume) { report('Worker paused. Review state and use --resume.'); return state; }
+    if (parking) {
+      const snapshot = await github.snapshot();
+      const excluded = new Set([...snapshot.linked, ...waitingNumbers, state.current.number]);
+      const selected = selectIssue(snapshot.issues, snapshot.dependencies, excluded);
+      if (selected?.number !== expectedIssue || (state.humanWaiting?.length ?? 0) >= 256) return state;
+      const fresh = await github.issue(expectedIssue);
+      const rechecked = await github.snapshot();
+      const linked = new Set([...rechecked.linked, ...waitingNumbers, state.current.number]);
+      if (selectIssue(rechecked.issues, rechecked.dependencies, linked)?.number !== expectedIssue
+        || !selectIssue([fresh], rechecked.dependencies, linked)) return state;
+      // Ensure GitHub also excludes the old issue before releasing its active slot.
+      await github.mark(state.current.number, 'needs_human');
+      state.humanWaiting = [...(state.humanWaiting ?? []), {current: state.current, reason: state.lastReason ?? 'needs_human', since: now()}];
+      state.current = null; state.status = 'idle'; state.paused = false; state.lastReason = null;
+      await persist();
+    }
     state.repo = repo;
     await telemetry?.update(state);
-    if (state.paused && !resume) { report('Worker paused. Review state and use --resume.'); return state; }
     // Resume only clears the pause after worktree safety is proven.
     if (resume && !state.current) { state.paused = false; await persist(); }
     let canResumeSession;
@@ -162,26 +220,48 @@ export async function worker({ config, mode = 'normal', resume = false, expected
       }
       if (!state.current) {
         const snapshot = await github.snapshot();
-        const issue = selectIssue(snapshot.issues, snapshot.dependencies, snapshot.linked);
+        const issue = selectIssue(snapshot.issues, snapshot.dependencies, new Set([...snapshot.linked, ...(state.humanWaiting ?? []).map(entry => entry.current.number)]));
         if (expectedIssue !== undefined && issue?.number !== expectedIssue) return state;
         if (!issue) { state.status = 'idle'; await persist(); if (mode === 'once') return state; await wait(config.pollMs, signal); continue; }
         // Recheck before claiming; run only one worker per repository (documented).
         const fresh = await github.issue(issue.number);
         // Bounded dispatch uses fresh dependencies and PR associations as well as fresh Issue labels.
         const rechecked = expectedIssue === undefined ? snapshot : await github.snapshot();
-        if ((expectedIssue !== undefined && selectIssue(rechecked.issues, rechecked.dependencies, rechecked.linked)?.number !== expectedIssue) || !selectIssue([fresh], rechecked.dependencies, rechecked.linked)) { if (mode === 'once') return state; await wait(config.pollMs, signal); continue; }
+        if ((expectedIssue !== undefined && selectIssue(rechecked.issues, rechecked.dependencies, new Set([...rechecked.linked, ...(state.humanWaiting ?? []).map(entry => entry.current.number)]))?.number !== expectedIssue) || !selectIssue([fresh], rechecked.dependencies, new Set([...rechecked.linked, ...(state.humanWaiting ?? []).map(entry => entry.current.number)]))) { if (mode === 'once') return state; await wait(config.pollMs, signal); continue; }
         state.current = { number: issue.number, branch: branchName(issue), worktree: join(config.stateDir, 'worktrees', `issue-${issue.number}`), failures: 0, quotaWaits: 0, stage: 'prepare', session: null };
         await persist();
       }
       const current = state.current;
       if (resolve(current.worktree) !== join(config.stateDir, 'worktrees', `issue-${current.number}`)) throw new Error('Unexpected worktree path in state');
       const issue = await github.issue(current.number);
+      if (approvalResume) {
+        const snapshot = await github.snapshot();
+        for (const dependency of metadata(issue.body).dependencies) snapshot.dependencies.set(dependency, (await github.issue(dependency)).state);
+        const timeline = JSON.parse(await github.gh(['api', '--paginate', '--slurp', `repos/${repo}/issues/${current.number}/timeline?per_page=100`]));
+        if (!Array.isArray(timeline) || timeline.some(page => !Array.isArray(page)) || timeline.flat().some(event => event.source?.issue?.pull_request && event.source.issue.state === 'open')) return state;
+        const eligible = { ...issue, labels: [...labels(issue).filter(name => name !== 'codex:needs-human'), 'codex:ready'] };
+        if (!selectIssue([eligible], snapshot.dependencies, snapshot.linked)) return state;
+        const reasons = [...new Set([...pendingReasons(current), ...(current.base ? await protectedReasons(current, execute, profile) : [])])];
+        if (!reasons.length) return state;
+        const bindings = { issue: issueBinding(issue), diff: current.base ? await diffBinding(current, execute) : undefined };
+        try { requireApprovals(approval.grants, approval.repositoryId, repo, current.number, reasons, bindings); }
+        catch (error) {
+          if (!(error instanceof HumanApprovalError)) throw error;
+          current.humanReasons = reasons; current.approvalStatus = error.approvalStatus;
+          await persist(); await github.mark(current.number, 'needs_human'); return state;
+        }
+      }
       const intervention = issue.state !== 'open' || labels(issue).some(n => ['codex:blocked', 'codex:failed', 'codex:needs-human'].includes(n));
-      if (intervention && !resume) { state.paused = true; state.status = 'needs-human'; state.lastReason = 'needs_human'; await persist(); return state; }
+      if (intervention && !resume && !approvalResume) { state.paused = true; state.status = 'needs-human'; state.lastReason = 'needs_human'; await persist(); return state; }
       if(typeof issue.body==='string'&&/<!--\s*codex-worker-status\s*-->/.test(issue.body)){state.paused=true;state.status='needs-human';state.lastReason='needs_human';await persist();return state;}
       if (issue.state !== 'open' || labels(issue).includes('codex:blocked')) throw new Error('Current issue is closed or blocked');
       const preflight = preflightReason(issue.body);
-      if (preflight) {
+      let manualApproved = false;
+      if (preflight && approval) {
+        try { requireApprovals(approval.grants, approval.repositoryId, repo, current.number, ['manual_e2e'], { issue: issueBinding(issue) }); manualApproved = true; }
+        catch (error) { if (!(error instanceof HumanApprovalError)) throw error; current.approvalStatus = error.approvalStatus; }
+      }
+      if (preflight && !manualApproved) {
         state.paused = true; state.status = 'needs-human'; state.lastReason = preflight;
         const reported = current.preflight?.reason === preflight && current.preflight?.reported === true;
         current.preflight = { category: 'manual_e2e', reason: preflight, reported };
@@ -197,6 +277,7 @@ export async function worker({ config, mode = 'normal', resume = false, expected
         report(`Issue #${current.number}: E2E execution is required; stopped before worktree/Codex preparation.`);
         return state;
       }
+      if (manualApproved) current.preflight = { category: 'manual_e2e', reason: preflight, reported: true };
       if (expectedIssue !== undefined) await saveJson(join(config.stateDir, 'result.schema.json'), resultSchema);
       if (canResumeSession === undefined) {
         const execHelp = await execute('codex', ['exec', '--help'], { purpose: 'codex' });
@@ -206,6 +287,7 @@ export async function worker({ config, mode = 'normal', resume = false, expected
         canResumeSession = ['--json', '--output-schema'].every(flag => resumeHelp.includes(flag));
       }
       current.worktreeCheck = await ensureWorktree(current, root, execute);
+      if (approvalResume) state.paused = false;
       if (resumePending) { state.paused = false; current.failures = 0; resumePending = false; }
       await persist();
       if (intervention) await github.gh(['issue', 'edit', String(current.number), '--repo', repo, '--remove-label', 'codex:failed', '--remove-label', 'codex:needs-human']);
@@ -242,7 +324,14 @@ export async function worker({ config, mode = 'normal', resume = false, expected
           current.progress = outcome.result.remaining_work;
           current.result = outcome.result;
         }
-        const status = disposition(outcome, current.failures, config);
+        let status = disposition(outcome, current.failures, config);
+        if (status === 'needs_human' && approval && !outcome.needsHuman && outcome.code === 0 && !outcome.quota && !outcome.interrupted
+          && outcome.result?.reasons?.length && outcome.result.reasons.every(reason => ['db','auth','permission','tenant','security','retention','manual_e2e'].includes(reason.category))) {
+          try {
+            requireApprovals(approval.grants, approval.repositoryId, repo, current.number, outcome.result.reasons.map(reason => reason.category), { issue: issueBinding(await github.issue(current.number)), diff: await diffBinding(current, execute) });
+            status = 'completed';
+          } catch (error) { if (!(error instanceof HumanApprovalError)) throw error; current.approvalStatus = error.approvalStatus; }
+        }
         state.lastReason = status;
         if (status === 'completed') { current.result = outcome.result; current.stage = 'publish'; }
         else if (status === 'quota_wait') {
@@ -272,7 +361,7 @@ export async function worker({ config, mode = 'normal', resume = false, expected
         await persist();
       }
       let verified;
-      try { verified = await verify(current, execute, profile); }
+      try { verified = await verify(current, execute, profile, approval); }
       catch (error) {
         if (signal?.aborted) throw error;
         if (error instanceof VerificationFailure && error.retryable && current.failures < config.maxRetries) {
@@ -290,11 +379,19 @@ export async function worker({ config, mode = 'normal', resume = false, expected
         if (error instanceof VerificationFailure && error.retryable) current.repair = error.diagnostic;
         if (error instanceof WorktreeSafetyError) current.worktreeCheck = error.check;
         if (error instanceof PublicationSafetyError) current.preflight={category:'deploy',reason:error.reason};
+        if (error instanceof HumanApprovalError) { current.humanReasons = [...new Set([...pendingReasons(current), ...error.reasons])]; current.approvalStatus = error.approvalStatus; state.lastReason = error.reason; }
         await persist(); await github.mark(current.number, 'needs_human');
         report(`Issue #${current.number}: parent verification needs human review.`);
         return state;
       }
       try {
+        if (verified.approvalBinding) {
+          const fresh = await github.issue(current.number);
+          if (fresh.state !== 'open' || labels(fresh).includes('codex:blocked')) throw new HumanApprovalError(verified.humanReasons);
+          const actual = await diffBinding(current, execute);
+          if (JSON.stringify(actual) !== JSON.stringify(verified.approvalBinding)) throw new HumanApprovalError(verified.humanReasons, 'stale');
+          requireApprovals(approval.grants, approval.repositoryId, repo, current.number, verified.humanReasons.filter(reason => reason === 'manual_e2e'), { issue: issueBinding(fresh) });
+        }
         delete current.repair;
         current.result.status = 'completed';
         current.result.safe_to_open_pr = true;
@@ -320,6 +417,7 @@ export async function worker({ config, mode = 'normal', resume = false, expected
         state.status = 'needs-human';
         state.lastReason = error instanceof WorktreeSafetyError || error instanceof PublicationSafetyError ? error.reason : 'publication_failed';
         if (error instanceof WorktreeSafetyError) { current.worktreeCheck = error.check; report(`Issue #${current.number}: ${error.message}`); }
+        if (error instanceof HumanApprovalError) { current.humanReasons = error.reasons; current.approvalStatus = error.approvalStatus; state.lastReason = error.reason; }
         await persist();
         await github.mark(current.number, 'needs_human');
         report(`Issue #${current.number}: publication needs human review.`);

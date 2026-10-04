@@ -20,7 +20,7 @@ test('owner-only dashboard IPC rotates bootstrap without expiring an existing br
  const next=await dashboardLaunchUrl(directory);assert.notEqual(next,dashboard.launchUrl);
  assert.equal((await fetch(dashboard.origin+'/api/status',{headers:{Cookie:cookie}})).status,200);
  assert.equal((await login(next)).status,200);assert.equal((await login(next)).status,403);
- now+=28800001;assert.equal((await fetch(dashboard.origin+'/api/status',{headers:{Cookie:cookie}})).status,401);
+ now+=30*24*60*60*1000;assert.equal((await fetch(dashboard.origin+'/api/status',{headers:{Cookie:cookie}})).status,401);
  assert.equal((await login(await dashboardLaunchUrl(directory))).status,200);
 });
 test('dashboard IPC rejects public directories, duplicate owners and arbitrary commands',async t=>{
@@ -31,4 +31,11 @@ test('dashboard IPC rejects public directories, duplicate owners and arbitrary c
  assert.match(await dashboardLaunchUrl(directory),/^http:\/\/127/);issued=0;
  await new Promise<void>(resolve=>{const client=createConnection(join(directory,'dashboard.sock'));client.on('error',()=>{});client.on('close',()=>resolve());client.on('connect',()=>client.write('EXEC\n'));});assert.equal(issued,0);
  const nested=join(directory,'nested');await mkdir(nested,{mode:0o755});await assert.rejects(dashboardLaunchUrl(nested));
+});
+
+test('mobile link IPC only permits private addresses and explicit MOBILE command',async t=>{
+ const directory=await realpath(await mkdtemp(join(tmpdir(),'lam-mobile-')));await chmod(directory,0o700);t.after(()=>rm(directory,{recursive:true,force:true}));
+ const ipc=await startDashboardSocket(directory,mobile=>mobile?'http://192.168.1.11:42731/#'+'b'.repeat(64):'http://127.0.0.1:42731/#'+'a'.repeat(64));t.after(()=>ipc.close());
+ assert.match(await dashboardLaunchUrl(directory,true),/^http:\/\/192\.168\.1\.11:/);
+ assert.match(await dashboardLaunchUrl(directory),/^http:\/\/127\.0\.0\.1:/);
 });

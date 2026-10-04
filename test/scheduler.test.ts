@@ -112,3 +112,38 @@ test('reservation storage failure never starts worker or acknowledges applied co
  await scheduler.tick();assert.equal(calls,0);assert.equal(scheduler.view().status,'blocked');assert.equal(scheduler.view().reason,'storage_uncertain');
  const ack=await f.controller.apply(f.request('global','pause'));assert.equal(ack.application?.status,'blocked');
 });
+
+test('a human stop retains its job while independent ready issues continue; waiting jobs never redispatch',async t=>{
+ const f=await fixture();const first=f.snapshot.repositories[0]!;
+ first.status='needs-human';first.paused=true;first.current={issue:55,stage:'implement',failures:1,quotaWaits:2,model:null,effort:null,reasonCategories:['external_service'],check:null,prUrl:null};
+ first.humanWaiting=[{job:{...first.current,issue:10},reason:'needs_human',since:new Date(0).toISOString()}];
+ const retained=JSON.stringify(first);const calls:string[]=[];
+ const scheduler=await Scheduler.create({...f,snapshot:async()=>f.snapshot,now:()=>f.clock.now,dispatch:async(id,issue)=>{calls.push(id+':'+issue);return outcome(issue);}});
+ t.after(async()=>{await scheduler.close();await f.controller.close();await rm(f.root,{recursive:true,force:true});});
+ await f.resume();await scheduler.tick();await scheduler.settled();assert.deepEqual(calls,['example--a:11']);assert.equal(JSON.stringify(first),retained);
+});
+
+test('all matching approvals select the saved human job before fresh queue; missing/stale and pause still block',async t=>{
+ const f=await fixture();const repo=f.snapshot.repositories[0]!;
+ repo.status='needs-human';repo.paused=true;repo.current={issue:57,stage:'publish',failures:0,quotaWaits:0,model:null,effort:null,reasonCategories:['auth','security'],check:null,prUrl:null,approvals:[{reason:'auth',status:'approved',approvable:true},{reason:'security',status:'missing',approvable:true}]};
+ // Remove independent work so a missing approval cannot mask itself as queue progress.
+ f.snapshot.queue.repositories[0]!.items=[];f.snapshot.repositories[1]!.paused=true;
+ const calls:number[]=[];const scheduler=await Scheduler.create({...f,snapshot:async()=>f.snapshot,now:()=>f.clock.now,dispatch:async(_id,issue)=>{calls.push(issue);return outcome(issue);}});
+ t.after(async()=>{await scheduler.close();await f.controller.close();await rm(f.root,{recursive:true,force:true});});
+ await f.resume();await scheduler.tick();assert.deepEqual(calls,[]);
+ repo.current.approvals![1]!.status='stale';await scheduler.tick();assert.deepEqual(calls,[]);
+ repo.current.approvals![1]!.status='approved';await f.controller.apply(f.request('global','pause'));await scheduler.tick();assert.deepEqual(calls,[]);
+ await f.controller.apply(f.request('global','resume'));await f.controller.apply(f.request(repo.id,'disable'));await scheduler.tick();assert.deepEqual(calls,[]);
+ await f.controller.apply(f.request(repo.id,'enable'));await scheduler.tick();await scheduler.settled();assert.deepEqual(calls,[57]);
+ assert.equal(repo.paused,true);assert.equal(repo.current.issue,57);
+});
+
+test('approved parked jobs keep manual worker pause and active current precedence',async t=>{
+ const f=await fixture();const repo=f.snapshot.repositories[0]!;repo.humanWaiting=[{job:{issue:48,stage:'prepare',failures:0,quotaWaits:0,model:null,effort:null,reasonCategories:['manual_e2e'],check:null,prUrl:null,approvals:[{reason:'manual_e2e',status:'approved',approvable:true}]},reason:'manual_e2e_required',since:new Date(0).toISOString()}];
+ f.snapshot.repositories[1]!.paused=true;f.snapshot.queue.repositories[0]!.items=[];repo.paused=true;
+ const calls:number[]=[];const scheduler=await Scheduler.create({...f,snapshot:async()=>f.snapshot,now:()=>f.clock.now,dispatch:async(_id,issue)=>{calls.push(issue);return outcome(issue);}});
+ t.after(async()=>{await scheduler.close();await f.controller.close();await rm(f.root,{recursive:true,force:true});});
+ await f.resume();await scheduler.tick();assert.deepEqual(calls,[]);
+ repo.paused=false;repo.current={...repo.humanWaiting[0]!.job,issue:58,stage:'implement',approvals:[]};await scheduler.tick();await scheduler.settled();assert.deepEqual(calls,[58]);
+ repo.current=null;f.clock.now+=30000;await scheduler.tick();await scheduler.settled();assert.deepEqual(calls,[58,48]);
+});

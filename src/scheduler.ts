@@ -87,13 +87,18 @@ export class Scheduler {
     const index=(this.state.cursor+offset)%registry.repositories.length;const configured=registry.repositories[index]!;
     const handoff=this.options.handoffs.find(item=>item.repositoryId===configured.id);const preference=prefs.repositories?.find(item=>item.id===configured.id);const repo=snapshot.repositories.find(item=>item.id===configured.id)!;
     if(!handoff||!configured.enabled||!preference?.enabled||preference.paused)continue;
-    if(repo.paused!==false||['needs-human','failed'].includes(repo.status)){skipped='needs_human';continue;}
-    if(repo.current) {if(repo.current.stage==='unknown'){skipped='worker_state_unavailable';continue;}selected={repositoryId:repo.id,issue:repo.current.issue,handoff,index};break;}
+    const humanStop=repo.status==='needs-human'&&repo.paused===true&&repo.current!==null&&repo.current.stage!=='unknown'&&repo.quota.nextRetryAt===null;
+    const reviewed=(job:NonNullable<typeof repo.current>)=>!!job.approvals?.length&&job.approvals.every(item=>item.status==='approved');
+    if(humanStop&&repo.current&&reviewed(repo.current)){selected={repositoryId:repo.id,issue:repo.current.issue,handoff,index};break;}
+    if(!repo.current&&repo.paused===false&&repo.status==='idle'){const waiting=repo.humanWaiting?.find(entry=>reviewed(entry.job));if(waiting){selected={repositoryId:repo.id,issue:waiting.job.issue,handoff,index};break;}}
+    if(!humanStop&&(repo.paused!==false||['needs-human','failed'].includes(repo.status))){skipped='needs_human';continue;}
+    if(repo.current&&!humanStop) {if(repo.current.stage==='unknown'){skipped='worker_state_unavailable';continue;}selected={repositoryId:repo.id,issue:repo.current.issue,handoff,index};break;}
     const queue=snapshot.queue.repositories.find(item=>item.repositoryId===repo.id&&item.repo===repo.repo);
     const stamp=queue?.updatedAt?Date.parse(queue.updatedAt):NaN;
     if(!queue||queue.status!=='observed'||!Number.isFinite(stamp)||this.now()-stamp>300_000||stamp>this.now()){skipped='queue_unverified';continue;}
     const order=['p0','p1','p2','p3','unspecified'];
-    const ready=queue.items.filter(item=>item.repositoryId===repo.id&&item.repo===repo.repo&&item.status==='ready'&&item.reason==='eligible').sort((a,b)=>order.indexOf(a.priority)-order.indexOf(b.priority)||a.issue-b.issue)[0];
+    const ready=queue.items.filter(item=>item.repositoryId===repo.id&&item.repo===repo.repo&&item.status==='ready'&&item.reason==='eligible'&&(!humanStop||item.issue!==repo.current?.issue)&&!repo.humanWaiting?.some(waiting=>waiting.job.issue===item.issue)).sort((a,b)=>order.indexOf(a.priority)-order.indexOf(b.priority)||a.issue-b.issue)[0];
+    if(!ready&&humanStop)skipped='needs_human';
     if(ready){selected={repositoryId:repo.id,issue:ready.issue,handoff,index};break;}
    }
    if(!selected){this.reason=skipped;return;}

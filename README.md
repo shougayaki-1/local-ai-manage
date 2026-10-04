@@ -37,6 +37,8 @@ npm start -- --registry registry.local.json --github --status
 
 ## Controller設定
 
+停止理由ごとの人間承認と、承認した差分／Issue要件に限定した再開を実装しました。管理画面の「確認が必要」から操作できます。Pause/Enableとは独立です。詳細は [人間承認の手順と契約](docs/human-approvals.md) を参照してください。
+
 GUIで全体Pause/Resume、repositoryごとのPause/Resume・Enable/Disableを保存できます。**既定の起動では設定保存のみ**です。`--execute`で明示的に移管設定を接続した起動では、schedulerの次のdispatchへ適用します。このMacでは2repoの移管と実dispatchを完了し、全体/repo Resumeで通常待機しています。GUI操作はneeds-human、workerのpaused、failure counter、session、quota、GitHub labelを直接変更しません。managed workerの通常処理は既存契約に従ってstate/labelを更新します。
 
 初回は全体およびrepositoryがPausedです。独立保存領域は `~/.local/state/local-ai-manage`。別pathは `--controller-state /absolute/private/directory` で指定できます（親directoryは事前作成）。clone/worker stateと重なるpath、symlink、他ユーザー所有、group/worldアクセス可能なdirectoryは拒否します。directoryは0700、ファイルは0600。demoおよびCLI `--status` はcontrollerを開かず、worker観測だけを返します。
@@ -64,7 +66,7 @@ HTTP操作には認証cookie、厳密なOrigin、JSON、session固有CSRF token�
 
 ## 安全境界
 
-127.0.0.1にのみbind、Host/Origin/peer検証、他origin CORSなし、HttpOnly SameSite=Strict session、短命single-use bootstrap、固定CSP、no-store。port競合は失敗し外部bindへfallbackしません。
+既定は127.0.0.1にのみbind。明示 `--tailscale auto` でVPN専用、`--lan <private IPv4>` でLAN専用の入口を追加できる。Host/Origin/peer検証、他origin CORSなし、HttpOnly SameSite=Strict session、短命single-use bootstrap、固定CSP、no-store。port競合は失敗し外部bindへfallbackしません。
 
 APIはraw stateを返しません。Issue本文/タイトル、branch、絶対path、session、result/progress自由文、token、PHI、raw stderr/tool output/reasoningを投影から除外します。stateJSONとarchiveはsymlink・1MiB超過を拒否。raw errorを返しません。秘密データが正規field（owner/repo等）に入らないようregistryは管理者が確認してください。
 
@@ -72,7 +74,7 @@ API: GET `/api/status`, `/api/repositories`, `/api/repositories/:id/status`, `/a
 
 GitHub認証は既存gh/OS keyringを再利用し、必要時だけgh subprocessに限定したGitHub環境を渡します。tokenを取り出したり設定へ保存したりしません。CODEX_HOME/API key/Supabase key/GH_DEBUG/NODE_OPTIONSはghに渡しません。Issue本文はmetadata解析のため一時的に取得しますが、cache・API・GUI・ログには保存しません。GET固定endpoint以外をadapterは拒否します。
 
-同一OSユーザーによる攻撃を完全隔離するsandboxではありません。専用workerユーザー/cloneと既存sandbox/credential isolationを維持してください。LAN公開・Tailscale・Tauriは将来の対応範囲です。このMacのcontroller/status LaunchAgentは登録済みです。
+同一OSユーザーによる攻撃を完全隔離するsandboxではありません。専用workerユーザー/cloneと既存sandbox/credential isolationを維持してください。Tailscale / LANの接続手順は [スマホからのアクセス](docs/mobile-access.md) を参照してください。Tauriは将来の対応範囲です。このMacのcontroller/status LaunchAgentは登録済みです。
 
 ## 検証
 
@@ -180,6 +182,10 @@ GUIの「切替前の確認」は認証済みのread-only `/api/readiness`で、
 同一コメント上のstale自動表示には `--status-actions /absolute/private/status`を用意しました。Mac側は固定workflowへsanitized observationを送信し、Actionsが更新・監視を同じ直列laneで処理します。逆順eventは観測時刻で拒否します。配布用テンプレートはexampleのまま、このMacの2repoではレビュー済みworkflowを有効化しました。直接publisherとの併用は不可です。詳細は[status更新・監視手順](docs/publishing.md)。
 
 最新の運用・検証結果は[運用手順](docs/live-operation.md)にまとめています。[確認記録](docs/acceptance-review.md)と[停止原因解消記録](docs/resolution-record.md)は準備時点の履歴です。
+
+## スマホ・外出先から使う
+
+MacとスマホでTailscaleに接続し、Macの管理画面の「スマホ用ログインリンク」から開いてください。詳細は [接続手順](docs/mobile-access.md)。
 
 ## このMacの管理設定（2026-10-04）
 

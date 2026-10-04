@@ -41,4 +41,28 @@ idle時はcontrollerの15秒heartbeatを明示的にmanaged-controllerとして�
 - 運用workflowのCareRecord PR #77 / #78 / #79は内容・CIを確認して手動merge。業務Draft PR #75 / #3はmergeしていない。
 - 本番credentialのコピー、local E2E、DB/migration適用は実施していない。CareRecordのPRに設定されたGitHub CIはその既存検証を実行した。通常のmain pushによる既存GitHub/Vercel integrationは停止・変更していない。
 
-対応profileはcare-record-v1とlocal-ai-manage-v1。Tauri、LAN公開、任意repo profile、model override、並列実行は将来範囲であり、今回の2repo運用には不要。新しいrepoはorigin/path重複・exact scripts・固定profile・移管確認を整えて登録する。
+対応profileはcare-record-v1とlocal-ai-manage-v1。Tauri、任意repo profile、model override、並列実行は将来範囲であり、今回の2repo運用には不要。新しいrepoはorigin/path重複・exact scripts・固定profile・移管確認を整えて登録する。
+
+## スマホ・外出先からの管理（2026-10-04追加）
+
+controllerに `--tailscale auto` を追加し、VPN接続時だけスマホ用の入口を有効化する。Macの管理画面の「スマホ用ログインリンク」または `Mobile-Link.command` から短命・一回用リンクを取得する。MacのTailscale IPv4は追加時点で `100.84.0.122`、portは42731。Mac / iPhoneのTailscale接続を確認。通常のloopbackアクセスと保存されたdispatch設定を維持する。詳細と再認証手順は [スマホ接続](mobile-access.md) を参照。
+
+反映後の実serviceで `100.84.0.122:42731` の未認証401、bootstrap200、status200、CSRF取得200、別Origin403を確認。待受は127.0.0.1とTailscale IPv4だけ。controller revision 5 / 全体Resumed / scheduler idleを維持。iPhoneのTailscaleアドレスへのping応答を確認。アプリ96件・worker115件、typecheck / lint / build / diff-check成功。iPhoneブラウザでの表示・操作は端末側での確認対象。
+
+## 確認待ちの保留とGitHub通知（2026-10-04追加）
+
+managed workerでIssueがneeds-humanになった場合、保存されたcurrentを次の独立Issueの開始前にhumanWaitingへ移す。session/base/worktree/検証失敗回数/結果はそのまま保持する。GitHubのcodex:needs-humanも維持し、確認待ちIssueと未完了の依存Issueがあるタスクは再実行しない。手動の全体・repo Pause/Disable、共有quota、不明reservationは引き続き新規実行を止める。確認待ちは管理画面の「確認が必要」に常時表示する。保留Issueの再開は人の判断後に保存状態を使って個別に行い、ラベル削除だけで自動再開しない。
+
+status serviceの `--mention-user shougayaki-1` によりcurrentまたはhumanWaitingの確認待ちを30秒ごとに確認する。各repoの `codex-worker-attention.yml` と固定 `engine/attention-writer.mjs` が、GitHub Actions Botから該当Issueに@メンションする。repo variable `CODEX_WORKER_MENTION_USER` は通知先login。issue/reason/category/checkだけを渡し、本文・ログ・session・保存パスは送らない。同じIssueと確認理由の通知はGitHub側のBotコメントmarkerで重複を防ぎ、再起動や応答喪失後も再通知しない。失敗時は5分間隔で再試行する。コメントを削除すれば次回の試行で再通知する。返信を自動で実行許可として扱わない。
+
+通知workflowはcontents:read / issues:writeだけを使用し、default branchの実行SHAに固定したscriptをContents APIで取得する。固定statusコメントのwriterとは別のconcurrency laneで、該当Issueへ新規commentを作成する。業務PRのmerge、DB適用、credential変更は行わない。
+
+反映確認: 通知専用の運用PR [CareRecord #80](https://github.com/shougayaki-1/care-record/pull/80) / [local-ai-manage #4](https://github.com/shougayaki-1/local-ai-manage/pull/4)を反映。CareRecord側のCI成功。実Bot通知 [#39へのコメント](https://github.com/shougayaki-1/care-record/issues/39#issuecomment-5978256184)、[Actions run 37190173341](https://github.com/shougayaki-1/care-record/actions/runs/37190173341)の成功を確認。serviceの通常停止・再起動前にprivate backupを取り、controller revision 5のResume設定を維持。#39のcurrent全体がhumanWaitingへそのまま保存されたことを元stateとのJSON比較で確認。次の独立候補#47をmanaged dispatch。管理アプリ101件・worker119件、typecheck / lint / build成功。
+
+## Issue #5 人間承認の反映（2026-10-04）
+
+実装commit [2311283](https://github.com/shougayaki-1/local-ai-manage/commit/23112835925fb68309b883b6f70f5b8747186e1d) を `codex/initial-controller` へPushし、このMacのcontroller/statusに反映した。稼働中の実行がないことを確認し、dispatchを保守Pause、privateなcontroller/worker stateとビルドをbackup、両serviceをSIGTERMで通常終了してから再ビルド・再起動した。lock/socketは旧processが解放し、削除・強制奪取はしていない。
+
+認証済みの実APIでapprovalRevision 0とcurrent/humanWaitingのカテゴリ別missing表示を確認した。不明repositoryを含む承認requestは400で拒否。人間承認は作成していない。CareRecord current #58 / humanWaiting #39, #47, #48, #57, #59、およびlocal-ai-manage current #5のstate.jsonはbackupとのSHA-256比較で完全一致した。repo Enabled/Resumedを維持し、保守Pauseだけを解除して全体Resumed、controller revision 7、scheduler idleへ復帰した。通常heartbeatと2つのLaunchAgentの新PIDを確認した。
+
+管理アプリ113件・worker130件（合計243件）の回帰、typecheck / lint / build / diff-check成功。E2E・DB適用・needs-human解除・業務PR mergeは行っていない。承認手順・scope・stale・再開契約は [人間承認の手順](human-approvals.md) を参照。管理画面を再読み込みすると承認操作が表示される。default branchへのmergeは行わず、Pushしたbranchのビルドを既存LaunchAgentが使用する。
