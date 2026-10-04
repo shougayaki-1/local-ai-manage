@@ -21,7 +21,7 @@ export interface RepoSnapshot {
   status: string; paused: boolean | null; current: Job | null;
   defaultModel: string; defaultEffort: string;
   quota: { status: 'waiting'|'unknown'; nextRetryAt: string | null; startedAt: string | null };
-  stateUpdatedAt: string | null; heartbeat: {at:string;status:'updating'|'stale'|'stopped'} | null;
+  stateUpdatedAt: string | null; heartbeat: {at:string;status:'updating'|'stale'|'stopped';source?:'managed-controller'} | null;
   logs: {status:'observed'|'stale'|'unavailable';events:{at:string;type:'state'|'worker.started'|'worker.stopped'|'codex.started';issue:number|null;stage:string|null;status:string}[]};
   freshness: 'observed'|'stale'|'unavailable'; reason: string;
   runs: { issue: number; outcome: string; stage: string; prUrl: string | null }[];

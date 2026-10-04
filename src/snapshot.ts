@@ -1,6 +1,7 @@
 import { open, realpath, opendir } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join } from 'node:path';
+import { projectSupervisorHeartbeat } from './supervisor-heartbeat.ts';
 import { projectTelemetry } from './telemetry.ts';
 import { record } from './registry.ts';
 import type { Job, Repository, RepoSnapshot, Registry, Snapshot } from './types.ts';
@@ -69,8 +70,10 @@ export async function observeRepository(repo: Repository, now: number): Promise<
     return {id:repo.id,repo:repo.repo,enabled:repo.enabled,ownership:'observe-only',status:'unavailable',paused:null,current:null,defaultModel:repo.defaultModel,defaultEffort:repo.defaultEffort,quota:{status:'unknown',nextRetryAt:null,startedAt:null},stateUpdatedAt:null,heartbeat:null,logs:{status:'unavailable',events:[]},freshness:'unavailable',reason:'status_unavailable',runs:[]};
   }
 }
-export async function collectSnapshot(registry: Registry, now=Date.now()): Promise<Snapshot> {
-  return {schemaVersion:1,generatedAt:new Date(now).toISOString(),mode:'observe-only',controller:{status:'observing',globalConcurrency:1,execution:'not-managed'},repositories:await Promise.all(registry.repositories.map(repo=>observeRepository(repo,now))),queue:{status:'unavailable',reason:'github_adapter_not_connected',repositories:[],items:[]}};
+export async function collectSnapshot(registry: Registry, now=Date.now(), supervisorDirectory?:string): Promise<Snapshot> {
+  const repositories=await Promise.all(registry.repositories.map(repo=>observeRepository(repo,now)));
+  if(supervisorDirectory)try{projectSupervisorHeartbeat((await readPrivateJson(join(supervisorDirectory,'supervisor-heartbeat.json'))).value,registry,repositories,now);}catch{/* Missing runtime observation remains unknown. */}
+  return {schemaVersion:1,generatedAt:new Date(now).toISOString(),mode:'observe-only',controller:{status:'observing',globalConcurrency:1,execution:'not-managed'},repositories,queue:{status:'unavailable',reason:'github_adapter_not_connected',repositories:[],items:[]}};
 }
 export function demoSnapshot(now=Date.now()): Snapshot {
   const repo: Repository={id:'example--care-record',repo:'example/care-record',clonePath:'/unused',stateDirectory:'/unused',enabled:false,ownership:'observe-only',defaultModel:'gpt-6.1-sol',defaultEffort:'medium',maximumConcurrency:1};

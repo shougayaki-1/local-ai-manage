@@ -636,6 +636,7 @@ for (const category of ['db', 'auth', 'permission', 'tenant', 'production', 'dep
     const state = await worker({ ...f.options, execute: f.execute, run: async () => ({ code: 0, result: { ...result,
       reasons: [{ category: 'sandbox_capability', check: 'test:ui' }, { category, check: 'none' }] } }) });
     assert.equal(state.status, 'needs-human'); assert.equal(state.current.failures, 0);
+    assert.deepEqual(state.current.result.reasons,[{category:'sandbox_capability',check:'test:ui'},{category,check:'none'}]);
     assert.ok(!f.calls.some(([b, a]) => b === 'git' && a[0] === 'push'));
   });
 }

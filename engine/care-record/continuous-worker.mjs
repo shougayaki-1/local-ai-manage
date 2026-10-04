@@ -240,6 +240,7 @@ export async function worker({ config, mode = 'normal', resume = false, expected
         if (outcome.result) {
           await saveJson(join(runDir, 'result.json'), outcome.result);
           current.progress = outcome.result.remaining_work;
+          current.result = outcome.result;
         }
         const status = disposition(outcome, current.failures, config);
         state.lastReason = status;

@@ -1,3 +1,4 @@
+import { startSupervisorHeartbeat } from './supervisor-heartbeat.ts';
 import { startDashboardSocket, dashboardLaunchUrl } from './dashboard-socket.ts';
 import { ActionsStatusPublisher } from './status-actions.ts';
 import { ReadinessService, demoReadiness } from './readiness.ts';
@@ -47,8 +48,8 @@ async function main() {
     else throw new Error('invalid_flags');
   }
   if(headless&&(!execute||!controlDirectory||open||demo||publisherDirectory||monitorDirectory||status||check||remoteStatus||recoveryTarget))throw new Error('invalid_headless');
-  if(producerReview&&(publisherDirectory||monitorDirectory||demo||open||status||execute||check||remoteStatus||controlDirectory||recoveryTarget||attestationPath||port!==0||github||!config))throw new Error('producer_plan_flags_invalid');
-  if(publisherDirectory||monitorDirectory){if(demo||open||status||execute||check||remoteStatus||controlDirectory||recoveryTarget||attestationPath||port!==0||monitorDirectory&&(config||github)||publisherDirectory&&(!config||!github))throw new Error('status_service_flags_invalid');}
+  if(producerReview&&(publisherDirectory||monitorDirectory||demo||open||status||execute||check||remoteStatus||recoveryTarget||attestationPath||port!==0||github||!config))throw new Error('producer_plan_flags_invalid');
+  if(publisherDirectory||monitorDirectory){if(demo||open||status||execute||check||remoteStatus||controlDirectory||recoveryTarget||attestationPath||port!==0||monitorDirectory&&(config||github||controlDirectory)||publisherDirectory&&(!config||!github))throw new Error('status_service_flags_invalid');}
   if(monitorDirectory){const result=await monitorStatus(await loadStatusTargets(monitorDirectory));console.log(JSON.stringify(result,null,2));process.exitCode=result.repositories.some(r=>['stale','unavailable','unknown'].includes(r.status))?2:0;return;}
   if((check||remoteStatus)&&(demo||open||execute||status||recoveryTarget||attestationPath||port!==0||!config||check&&remoteStatus||check&&!controlDirectory||remoteStatus&&controlDirectory))throw new Error('diagnostic_flags_invalid');
   if (demo && config) throw new Error('choose_one_source');
@@ -59,7 +60,7 @@ async function main() {
   if(producerReview&&registry){const result=await producerPlan(registry);console.log(JSON.stringify(result,null,2));process.exitCode=result.repositories.some(r=>r.status==='blocked')?2:0;return;}
   if(publisherDirectory&&registry){
     const targets=await loadStatusTargets(publisherDirectory,registry);const release=await lockPublisher(publisherDirectory);const reader=new QueueObserver(registry);const publisher=actionsPublisher?new ActionsStatusPublisher(targets):new StatusPublisher(targets);let stopping=false;let wake:(()=>void)|undefined;const stop=()=>{stopping=true;wake?.();};process.on('SIGINT',stop);process.on('SIGTERM',stop);
-    try{while(!stopping){await loadStatusTargets(publisherDirectory,registry).then(current=>{if(JSON.stringify(current)!==JSON.stringify(targets))throw new Error('status_targets_changed');});const value=await collectSnapshot(registry);void reader.refresh();value.queue=reader.snapshot();console.log(JSON.stringify(await publisher.tick(value,Date.now(),()=>stopping)));if(!stopping)await new Promise<void>(resolve=>{const timer=setTimeout(()=>{wake=undefined;resolve();},30000);wake=()=>{clearTimeout(timer);wake=undefined;resolve();};});}}finally{reader.close();process.off('SIGINT',stop);process.off('SIGTERM',stop);await release();}return;
+    try{while(!stopping){await loadStatusTargets(publisherDirectory,registry).then(current=>{if(JSON.stringify(current)!==JSON.stringify(targets))throw new Error('status_targets_changed');});const value=await collectSnapshot(registry,Date.now(),controlDirectory);void reader.refresh();value.queue=reader.snapshot();console.log(JSON.stringify(await publisher.tick(value,Date.now(),()=>stopping)));if(!stopping)await new Promise<void>(resolve=>{const timer=setTimeout(()=>{wake=undefined;resolve();},30000);wake=()=>{clearTimeout(timer);wake=undefined;resolve();};});}}finally{reader.close();process.off('SIGINT',stop);process.off('SIGTERM',stop);await release();}return;
   }
   if(check&&registry&&controlDirectory){const result=await preflight(registry,resolve(controlDirectory),{github});console.log(JSON.stringify(result,null,2));process.exitCode=result.status==='blocked'?2:0;return;}
   if(remoteStatus&&registry){const value=await collectSnapshot(registry);if(github){const reader=new QueueObserver(registry);try{await reader.refresh();value.queue=reader.snapshot();}finally{reader.close();}}console.log(JSON.stringify(value.repositories.map(repo=>({repositoryId:repo.id,body:formatRemoteStatus(repo,value.queue.repositories.find(q=>q.repositoryId===repo.id))})),null,2));return;}
@@ -78,7 +79,7 @@ async function main() {
     controller=await Controller.create(registry,directory);
   }
   const snapshot=async()=>{
-    const value=registry?await collectSnapshot(registry):demoSnapshot();
+    const value=registry?await collectSnapshot(registry,Date.now(),controlDirectory):demoSnapshot();
     if(observer) { void observer.refresh(); value.queue=observer.snapshot(); }
     return controller?controller.project(value):value;
   };
@@ -92,6 +93,7 @@ async function main() {
   catch(error) {await scheduler?.close();observer?.close();await controller?.close();throw error;}
   let socket:Awaited<ReturnType<typeof startDashboardSocket>>|undefined;
   if(headless&&controller){try{socket=await startDashboardSocket(controller.directoryPath(),()=>dashboard.issueLaunchUrl());}catch(error){await dashboard.close();await scheduler?.close();observer?.close();await controller.close();throw error;}}
+  const supervisor=scheduler&&controller&&registry?await startSupervisorHeartbeat(controller.directoryPath(),registry):undefined;
   scheduler?.start();
   console.log(`Local AI Manage: ${dashboard.origin} (${execute?'managed · dispatch initially follows saved preferences':'observe-only'})`);
   if (open && process.platform==='darwin') {
@@ -102,7 +104,7 @@ async function main() {
     console.log(`One-time login link (expires in 2 minutes): ${dashboard.launchUrl}`);
   }
   let stopping=false;
-  const stop=()=>{if(stopping)return;stopping=true;console.log('Stopping new dispatch; waiting for the current job to finish.');void (scheduler?scheduler.close():Promise.resolve()).then(()=>{observer?.close();return dashboard.close();}).then(()=>socket?.close()).then(()=>controller?.close()).then(()=>process.exit(0)).catch(()=>{console.error('Shutdown incomplete; retained state requires review.');process.exitCode=1;});};
+  const stop=()=>{if(stopping)return;stopping=true;console.log('Stopping new dispatch; waiting for the current job to finish.');void (scheduler?scheduler.close():Promise.resolve()).then(()=>{observer?.close();return dashboard.close();}).then(()=>supervisor?.close()).then(()=>socket?.close()).then(()=>controller?.close()).then(()=>process.exit(0)).catch(()=>{console.error('Shutdown incomplete; retained state requires review.');process.exitCode=1;});};
   process.on('SIGINT',stop); process.on('SIGTERM',stop);
 }
 main().catch(error=>{if(process.argv.some(arg=>['--recovery-plan','--reconcile','--recovery-resume-plan','--resume-recovery'].includes(arg))){console.error('Recovery did not complete. Check the private attestation, unchanged plan, worker locks and recovery markers. Retained evidence requires review; no worker state or lock is cleared automatically.');process.exitCode=1;return;}void error;console.error('Startup failed. Check registry paths, origin, build and CLI flags. Legacy worker state was not changed.');process.exitCode=1;});

@@ -40,7 +40,7 @@ export async function command(binary, args, { cwd, input, purpose = 'build', tim
   let privateHome;
   try {
     if (purpose !== 'codex') {
-      privateHome = await mkdtemp(join(tmpdir(), 'care-record-worker-home-'));
+      privateHome = await mkdtemp(join(platform() === 'darwin' ? '/private/tmp' : tmpdir(), 'care-record-worker-home-'));
       for (const path of ['tmp', 'config', 'cache', 'data']) await mkdir(join(privateHome, path), { mode: 0o700 });
     }
     return await new Promise((resolve, reject) => {

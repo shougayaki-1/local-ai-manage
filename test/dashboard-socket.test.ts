@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, chmod, mkdir, rm, realpath } from 'node:fs/promises';
+import { mkdtemp, chmod, mkdir, rm, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createConnection } from 'node:net';
@@ -9,7 +9,8 @@ import { startServer } from '../src/server.ts';
 import { demoSnapshot } from '../src/snapshot.ts';
 test('owner-only dashboard IPC rotates bootstrap without expiring an existing browser session',async t=>{
  const directory=await realpath(await mkdtemp(join(tmpdir(),'lam-socket-')));await chmod(directory,0o700);let now=1000;
- const dashboard=await startServer({snapshot:async()=>demoSnapshot(),webDirectory:join(process.cwd(),'dist/web'),now:()=>now});
+ const web=join(directory,'web');await mkdir(web);await writeFile(join(web,'index.html'),'<html></html>');
+ const dashboard=await startServer({snapshot:async()=>demoSnapshot(),webDirectory:web,now:()=>now});
  t.after(()=>dashboard.close());
  const ipc=await startDashboardSocket(directory,()=>dashboard.issueLaunchUrl());
  t.after(async()=>{await ipc.close();await rm(directory,{recursive:true,force:true});});
