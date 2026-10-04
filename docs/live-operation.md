@@ -58,3 +58,11 @@ status serviceの `--mention-user shougayaki-1` によりcurrentまたはhumanWa
 通知workflowはcontents:read / issues:writeだけを使用し、default branchの実行SHAに固定したscriptをContents APIで取得する。固定statusコメントのwriterとは別のconcurrency laneで、該当Issueへ新規commentを作成する。業務PRのmerge、DB適用、credential変更は行わない。
 
 反映確認: 通知専用の運用PR [CareRecord #80](https://github.com/shougayaki-1/care-record/pull/80) / [local-ai-manage #4](https://github.com/shougayaki-1/local-ai-manage/pull/4)を反映。CareRecord側のCI成功。実Bot通知 [#39へのコメント](https://github.com/shougayaki-1/care-record/issues/39#issuecomment-5978256184)、[Actions run 37190173341](https://github.com/shougayaki-1/care-record/actions/runs/37190173341)の成功を確認。serviceの通常停止・再起動前にprivate backupを取り、controller revision 5のResume設定を維持。#39のcurrent全体がhumanWaitingへそのまま保存されたことを元stateとのJSON比較で確認。次の独立候補#47をmanaged dispatch。管理アプリ101件・worker119件、typecheck / lint / build成功。
+
+## Issue #5 人間承認の反映（2026-10-04）
+
+実装commit [2311283](https://github.com/shougayaki-1/local-ai-manage/commit/23112835925fb68309b883b6f70f5b8747186e1d) を `codex/initial-controller` へPushし、このMacのcontroller/statusに反映した。稼働中の実行がないことを確認し、dispatchを保守Pause、privateなcontroller/worker stateとビルドをbackup、両serviceをSIGTERMで通常終了してから再ビルド・再起動した。lock/socketは旧processが解放し、削除・強制奪取はしていない。
+
+認証済みの実APIでapprovalRevision 0とcurrent/humanWaitingのカテゴリ別missing表示を確認した。不明repositoryを含む承認requestは400で拒否。人間承認は作成していない。CareRecord current #58 / humanWaiting #39, #47, #48, #57, #59、およびlocal-ai-manage current #5のstate.jsonはbackupとのSHA-256比較で完全一致した。repo Enabled/Resumedを維持し、保守Pauseだけを解除して全体Resumed、controller revision 7、scheduler idleへ復帰した。通常heartbeatと2つのLaunchAgentの新PIDを確認した。
+
+管理アプリ113件・worker130件（合計243件）の回帰、typecheck / lint / build / diff-check成功。E2E・DB適用・needs-human解除・業務PR mergeは行っていない。承認手順・scope・stale・再開契約は [人間承認の手順](human-approvals.md) を参照。管理画面を再読み込みすると承認操作が表示される。default branchへのmergeは行わず、Pushしたbranchのビルドを既存LaunchAgentが使用する。
