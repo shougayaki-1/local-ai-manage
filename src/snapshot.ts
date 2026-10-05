@@ -1,3 +1,4 @@
+import { recoveryState } from './approval-policy.ts';
 import { open, realpath, opendir } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join } from 'node:path';
@@ -26,7 +27,7 @@ export function projectJob(value: unknown, repo: string): Job|null {
   const supplied=Array.isArray(result.reasons) ? result.reasons : [];
   const all=[...supplied,repair,preflight,...(Array.isArray(value.humanReasons)?value.humanReasons.map(category=>({category})):[])].filter(record).map(v=>v.category).filter((v): v is string => typeof v==='string' && categories.includes(v));
   const check=[repair.check,...supplied.filter(record).map(reason=>reason.check)].find(value=>checks.includes(String(value)));
-  return {issue:value.number,stage:stages.includes(String(value.stage)) ? value.stage as Job['stage'] : 'unknown',failures:count(value.failures),quotaWaits:count(value.quotaWaits),model:null,effort:null,reasonCategories:[...new Set(all)],check:check===undefined?null:String(check),prUrl:prUrl(value.pr,repo)};
+  return {...(recoveryState(value)?{recovery:recoveryState(value)!}:{}),issue:value.number,stage:stages.includes(String(value.stage)) ? value.stage as Job['stage'] : 'unknown',failures:count(value.failures),quotaWaits:count(value.quotaWaits),model:null,effort:null,reasonCategories:[...new Set(all)],check:check===undefined?null:String(check),prUrl:prUrl(value.pr,repo)};
 }
 export function projectState(raw: unknown, repo: Repository, updatedAt: number, now: number): RepoSnapshot {
   if (!record(raw) || raw.version!==1 || raw.repo?.toString().toLowerCase()!==repo.repo.toLowerCase() || !statuses.includes(String(raw.status)) || typeof raw.paused!=='boolean' || (raw.current!==null && (!record(raw.current) || !issue(raw.current.number) || !stages.includes(String(raw.current.stage))))) throw new Error('invalid_state');

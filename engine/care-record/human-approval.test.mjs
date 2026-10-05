@@ -174,3 +174,11 @@ test('operational recovery descriptor rejects commands, wrong binding kinds and 
  assert.deepEqual(parseDispatchDescriptor({...base,recovery}).recovery,recovery);
  for(const bad of [{...recovery,command:'echo hacked'}, {...recovery,diff:recovery.issue}, {...recovery,issue:{...recovery.issue,issueDigest:'invalid'}}])assert.throws(()=>parseDispatchDescriptor({...base,recovery:bad}));
 });
+
+test('full #59 category fixture automatically verifies and resumes after every matching private review is present',async t=>{
+ const f=await fixture(t,59,true);await f.change('example.txt','implemented\n');const human=['db','auth','permission','tenant','manual_e2e','security'];
+ f.current.humanReasons=[...human,'local_verification','sandbox_capability'];f.current.stage='implement';f.current.result={...result,status:'needs_human',safe_to_open_pr:false,reasons:[{category:'local_verification',check:'test:ui'},{category:'sandbox_capability',check:'test:ui'}]};
+ await f.approve(human);const recovery={issue:issueBinding(f.issue),diff:await diffBinding(f.current,f.execute)};await f.save();
+ const state=await f.run({recovery});assert.equal(state.status,'idle');assert.ok(f.calls.some(([b,a])=>b==='npm'&&a.includes('test:ui')));assert.ok(f.calls.some(([b,a])=>b==='node'&&a[0].endsWith('/e2e/run-local.mjs')));
+ const saved=JSON.parse(await readFile(join(f.stateDir,'issue-59.json'),'utf8'));assert.equal(saved.session,'saved-session');assert.equal(saved.base,f.base);
+});
