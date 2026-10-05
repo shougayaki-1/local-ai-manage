@@ -21,6 +21,7 @@ comment の安全な表示は category/status、固定 check、Worker waiting/re
 個人 repository の owner は GitHub repository API の stable numeric owner ID で照合する。組織 ID は human actor として認めない。組織 repository または追加 reviewer は管理者が登録時に stable user ID を指定する。Issue や reaction から設定を変更できない。
 
 ```json
+"canonicalSpecs": ["docs/system-decisions.md"],
 "githubReview": {
   "reviewerIds": [123456],
   "e2e": {"specs": ["auth"], "projects": ["chromium", "mobile-chrome"]}
@@ -28,6 +29,8 @@ comment の安全な表示は category/status、固定 check、Worker waiting/re
 ```
 
 `e2e` は #5 の既存 enum allowlist に限定し、受入条件に必要な範囲を管理者が事前設定する。不要なら null。care-record-v1 のみで、既存 pinned config、専用 local 環境、skip/retry/expected failure 拒否を維持する。未設定の manual_e2e は scope required と表示して承認・実行しない。path/glob/CLI flags/shell を入力できない。設定は registry fingerprint に束縛されるため、既存 handoff/状態との整合を通常の安全手順で確認する。この実装作業では live registry、handoff、controller、credentials を変更していない。
+
+検証用repositoryでも既存workerの固定ラベルを初期設定する（codex:ready、codex:running、codex:needs-human、codex:failed、codex:blocked）。不足によるGitHub更新失敗もfail-closedとし、未知完了のdispatch lockを消して再開しない。
 
 ## specification と operational blockers
 
@@ -37,10 +40,12 @@ specification は grant 対象ではない。owner が **Issue 本文または�
 
 worker は登録したcanonical内容をprivate promptへ渡して同じ saved session/worktree/base を保ち、再評価した Issue digest/request ID を private state に保存して replay を拒否する。canonical内容はdispatch・検証前・publication前にも独立再取得し、digestが変われば停止する。本文・raw blob・absolute pathはreview state/commentへ保存・表示しない。仕様確認を approval 扱いせず、Codex が再び specification を返せば停止し、同じ comment を次の decision request に更新する。他の human guard、有限 verification repair、必須 checks は維持する。
 
+canonical更新でも既存のmain/base整合guardは省略しない。default branchが保存baseより進んだ場合はstale worktreeとして停止し、人による安全な整合確認が必要。仕様の再評価reactionをrebase/resetやbase変更の権限へ転用しない。通常のIssue本文更新はこのbase移動を必要としない。
+
 信頼済み registry の local-automatic は #7 の全固定検証・使い捨てDB/E2E契約に従い、GitHubにもhuman categoriesをautomaticと表示する。manager profileのsecurity・specification・禁止カテゴリは自動対象にしない。
 
 local_verification / sandbox_capability / verification_retry_limit は #7 の固定 parent verification に従い、👍 を要求しない。automatic retry または failed / human investigation を表示する。production/deploy/credential/destructive/auto-merge の権限は追加しない。実装により sandbox/network 制約を変更しない。
 
 ## 検証範囲
 
-合成 Git・mock GitHub/Codex と loopback HTTP/IPC で、正規 owner/reviewer、偽 author/comment/marker、旧 reaction、Issue/diff変更、race、API/永続化失敗、restart、duplicate poll、auto resume、仕様再停止、禁止カテゴリを回帰確認する。実 GitHub の承認 reaction、live worker dispatch、CareRecord E2E/DB、production/deploy は実施しない。導入は人が Draft PR をレビューして行う。
+合成 Git・mock GitHub/Codex と loopback HTTP/IPC で、正規 owner/reviewer、偽 author/comment/marker、旧 reaction、Issue/diff/canonical変更、race、API/永続化失敗、restart、duplicate poll、auto resume、仕様再停止、禁止カテゴリを回帰確認する。専用private repositoryでも実owner reactionからprivate grant、actual bounded worker dispatch、固定検証、同じsaved worktreeでのDraft PR作成まで成功した（追加Resume・ready再付与・queue投入なし）。保存済みpublish stageの合成sessionを使い、実Codex inferenceは行っていない。使い捨てCareRecord DBの再構築・SQL/isolation/generated typesは成功し、PC/mobile E2Eは既存mobile recovery navigationで失敗した。production/deploy、稼働中controller設定変更は行っていない。導入は人が Draft PR をレビューして行う。
