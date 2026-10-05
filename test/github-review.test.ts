@@ -197,3 +197,12 @@ test('parked automatic review during quota wait preserves quota and lets the act
  assert.equal(f.posts,1);assert.deepEqual(calls,[]);assert.equal(scheduler.view().reason,'shared_quota_wait');assert.equal(f.approvals.revision(),0);
  f.clock.now=nextRetryAt;await scheduler.tick();await scheduler.settled();assert.deepEqual(calls,[84]);assert.equal(await readFile(path,'utf8'),before);
 });
+
+
+test('DB/E2E verification failure remains an investigation and can publish its fixed check identifier',async t=>{
+ const f=await fixture(t,['local_verification']);
+ f.current.recoveryStatus='investigation';f.current.repair={category:'local_verification',check:'local_db_e2e',diagnostic:'check_failed'};f.current.result={reasons:[{category:'local_verification',check:'local_db_e2e'}]};await f.save();
+ await f.tick();assert.match(f.comments.get(101)!.body,/Check: local_db_e2e/);assert.match(f.comments.get(101)!.body,/human investigation required/);
+ f.thumb();await f.tick();assert.equal(f.approvals.revision(),0);assert.equal((await f.snapshot()).repositories[0]!.current!.githubReviewReady,false);
+ parseReviewState(await f.document(),f.registry);
+});
