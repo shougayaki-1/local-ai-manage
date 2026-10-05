@@ -15,7 +15,7 @@ import { pendingReasons, approvableReasons, operationalReasons, parseReviewBindi
 import type { Registry, Repository, Snapshot, Job } from './types.ts';
 
 const categories=[...approvableReasons,...operationalReasons,'specification','production','deploy','credential','external_service','destructive','worktree_safety'];
-const checks=['typecheck','lint','test','test:unit','test:ui','build','test:codex-worker','test:ci-scope','diff-check'];
+const checks=['local_db_e2e','typecheck','lint','test','test:unit','test:ui','build','test:codex-worker','test:ci-scope','diff-check'];
 const states=['missing','approved','stale','automatic','automatic_retry_pending','human_investigation_required','decision_required','reevaluating','non_approvable','scope_required'] as const;
 type ReviewStatus=typeof states[number];
 type Worker='waiting'|'resuming'|'running'|'idle';
