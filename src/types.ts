@@ -15,6 +15,7 @@ export interface Job {
   failures: number | null; quotaWaits: number | null;
   model: string | null; effort: string | null;
   reasonCategories: string[]; check: string | null; prUrl: string | null;
+  recovery?: 'automatic_retry_pending'|'human_investigation_required';
   approvals?: {reason:string;status:'missing'|'approved'|'stale';approvable:boolean}[];
 }
 export interface RepoSnapshot {

@@ -9,6 +9,7 @@ function validCurrent(current) {
     && /^codex\/issue-\d+-[a-z0-9-]+$/.test(current.branch ?? '') && current.branch.startsWith(`codex/issue-${current.number}-`)
     && typeof current.worktree === 'string' && Number.isInteger(current.failures) && current.failures >= 0
     && Number.isInteger(current.quotaWaits) && current.quotaWaits >= 0 && ['prepare', 'implement', 'publish'].includes(current.stage)
+    && (current.recoveryStatus === undefined || current.recoveryStatus === 'investigation')
     && (current.repair === undefined || repairDiagnostic(current.repair))
     && (current.verificationChecks === undefined || (Array.isArray(current.verificationChecks)
       && current.verificationChecks.every(name => localChecks.includes(name))));

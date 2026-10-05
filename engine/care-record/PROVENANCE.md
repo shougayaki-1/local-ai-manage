@@ -13,3 +13,5 @@ lib/*.mjsはcodex-runner.mjsのspawn成功通知・profile別prompt、queue.mjs�
 2026-10-04、Issue #5の固定人間承認契約を追加。lib/human-approval.mjs、lib/approved-e2e.mjsとmanager所有private履歴で、repository/Issue/category/base/HEAD/content digest（manual_e2eはIssue本文digest）を束縛する。workerはguardを保持し、対応する明示承認がある場合だけ通過し、verify/E2E/commit/publish境界で再検証する。
 
 e2e/run-local.mjsとe2e/local-environment.mjsはユーザー所有CareRecordのscripts/e2e working-tree snapshot（2026-10-04）から取得。run-localはrepository rootをmanager固定argsから受け、enum spec/project・retry 0・skip/expected failure拒否・raw output省略へ適応したtrusted artifact。playwright.config.ts.referenceは同snapshotの検証fixtureで、SHA-256は0cfed6fa2a38ed34dc427f470ce8d5efb0782995ed31826ac871c3220e30fb64、local-environment.mjsはa44b17e1cd2ec92ef6b68f1b1a449d1833e03e4feb6d9ad179c8d682a52a66cd。実行時はこのconfig/guardのpinとexact dev scriptを確認し、未レビューのconfig変更は承認でも許可しない。source-manifest.jsonの元worker取得記録は変更しない。
+
+2026-10-05、Issue #7: human grants を維持し、固定 binding の operational recovery descriptor と parent 検証を追加。verification failure の finite repair と永続 investigation、checks の exact profile、sandbox/credential 分離は維持。元source-manifestを改変せず、現artifactの合成回帰で検証。

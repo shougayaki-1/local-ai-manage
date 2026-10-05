@@ -50,3 +50,15 @@ spec allowlistはauth、workspace-routing、staff-features、tenant-isolation、
 対象specとprojectの固定args、`--retries=0 --forbid-only --reporter=json` を構築します。検証結果にskip、retry、expected failure、失敗、ゼロ件があれば成功扱いにしません。既存timeoutを増やしません。Issue本文から実行コマンドを抽出しません。E2E承認はDB/RLS/auth等の差分承認を兼ねません。
 
 本実装の検証は合成Issue・一時Git・モックE2E計画・loopback HTTPを使用し、実E2E、production、GitHubの実変更、稼働中workerの再開は行いません。
+
+## Operational recovery (Issue #7)
+
+`local_verification / sandbox_capability / verification_retry_limit` は承認対象ではありません。承認一覧には表示せず、`automatic_retry_pending`（自動復旧中）または `human_investigation_required` を独立表示します。非承認カテゴリは private grant に変換できません。
+
+manager は saved Issue・base・HEAD・有効な差分digestを照合した固定 recovery descriptor を bounded bridge に渡します。worker は fresh Issue、dependency、関連PR、worktree/branch/profile と binding を再検証し、同じsession/worktreeを保持して parent verification を実施します。Issue の ready 再付与、Resume、queue 再投入は不要です。global/repository の Pause/Disable、quota、未知の実行完了は解除しません。
+
+checks は既存 profile の exact script と hook 契約のみ。Issue本文・コメント・raw error から command/path/flag を生成しません。混在する human categories には #5 の matching grants が引き続き必要です。最新 main に automatic human review policy は存在しないため、その未commit実装は取り込まず、human review は manual のままです。CareRecord #59 回帰は同じカテゴリ集合と matching private grants を使って、この安全境界を検証します。
+
+required checks 成功後のみ commit/push/Draft publication に進みます。検証中の差分内容変更も検出します。本当の check failure は既存有限repairへ戻り、失敗回数を保持します。上限到達時は investigation を永続化し、scheduler は同じ失敗作業を無限選択しません。以前の retry-limit state も一度再検証でき、失敗は成功扱いしません。sandbox/network の設定変更、production、credential、destructive、auto merge の許可は追加しません。
+
+検証は合成Git、mock Codex/GitHub、loopback HTTP/IPC。実worker、実E2E、DB適用、稼働反映は実施していません。

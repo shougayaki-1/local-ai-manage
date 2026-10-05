@@ -7,7 +7,7 @@ import { record } from './registry.ts';
 import type { Job, Repository, RepoSnapshot, Registry, Snapshot } from './types.ts';
 const statuses=['idle','running','quota-wait','needs-human','failed'];
 const stages=['prepare','implement','publish'];
-const categories=['sandbox_capability','local_verification','db','auth','permission','tenant','production','deploy','credential','external_service','destructive','security','retention','specification','manual_e2e','worktree_safety'];
+const categories=['sandbox_capability','local_verification','verification_retry_limit','db','auth','permission','tenant','production','deploy','credential','external_service','destructive','security','retention','specification','manual_e2e','worktree_safety'];
 const reasons=['running','completed','stopped','paused','needs_human','quota_wait','manual_e2e_required','human_approval_required','parent_verification_retry','verification_retry_exhausted','unsafe_or_unavailable_verification','parent_verification_safety_failed','publication_failed','operational_error','stale_existing_worktree','worktree_base_mismatch','branch_deployment_not_disabled','worktree_branch_mismatch','missing_saved_worktree','repair_session_resume_unavailable','repair_session_mismatch'];
 const checks=['typecheck','lint','test','test:unit','test:ui','build','test:codex-worker','test:ci-scope','diff-check'];
 const count=(v: unknown): number|null => Number.isSafeInteger(v) && (v as number)>=0 ? v as number : null;

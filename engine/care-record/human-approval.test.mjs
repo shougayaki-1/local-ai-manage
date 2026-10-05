@@ -8,11 +8,13 @@ import { worker, verify, configuration } from './continuous-worker.mjs';
 import { emptyState, saveJson } from './lib/state.mjs';
 import { diffBinding, issueBinding, requireApprovals, parseGrant, parseE2e, protectedReasons } from './lib/human-approval.mjs';
 import { assertE2ePlan } from './lib/approved-e2e.mjs';
+import { CommandFailure } from './lib/failure.mjs';
+import { recoveryState } from './lib/human-approval.mjs';
 import { parseDispatchDescriptor } from './dispatch-contract.mjs';
 
 const scripts={typecheck:'tsc --noEmit',lint:'eslint',dev:'next dev --webpack','test:unit':'vitest run --project unit','test:ui':'vitest run --project storybook'};
 const result={status:'completed',summary:'Done',tests:[],unrun_tests:'None',security_impact:'Reviewed',remaining_work:'None',safe_to_open_pr:true,reasons:[]};
-async function fixture(t,number=57){
+async function fixture(t,number=57,liveLabels=false){
  const root=await realpath(await mkdtemp(join(tmpdir(),'approval-worker-')));const clone=join(root,'clone'),stateDir=join(root,'state');await mkdir(clone);await mkdir(stateDir,{mode:0o700});
  const git=(args,cwd=clone)=>command('git',args,{cwd});await git(['init','-b','main']);await git(['config','user.name','Test']);await git(['config','user.email','test@example.invalid']);await git(['remote','add','origin','https://github.com/test/repo.git']);
  await mkdir(join(clone,'scripts/e2e'),{recursive:true});await writeFile(join(clone,'playwright.config.ts'),await readFile(new URL('./e2e/playwright.config.ts.reference',import.meta.url)));await writeFile(join(clone,'scripts/e2e/local-environment.mjs'),await readFile(new URL('./e2e/local-environment.mjs',import.meta.url)));
@@ -35,6 +37,7 @@ async function fixture(t,number=57){
     if(endpoint.includes('/pulls?')||endpoint.includes('/timeline?'))return '[[]]';
     return JSON.stringify([[issue]]);
    }
+   if(liveLabels&&args[0]==='issue'&&args[1]==='edit'){for(let i=0;i<args.length;i++){if(args[i]==='--remove-label')issue.labels=issue.labels.filter(label=>label.name!==args[i+1]);if(args[i]==='--add-label'&&!issue.labels.some(label=>label.name===args[i+1]))issue.labels.push({name:args[i+1]});}}
    if(args[0]==='pr'&&args[1]==='list')return '[]';
    if(args[0]==='pr'&&args[1]==='create')return 'https://github.com/test/repo/pull/99';
    return '';
@@ -44,7 +47,7 @@ async function fixture(t,number=57){
  const approval={repositoryId:'test--repo',repo:'test/repo',grants:[],issue:async()=>issue};
  const approve=async(reasons)=>{for(const reason of reasons)approval.grants.push(parseGrant({repositoryId:'test--repo',repo:'test/repo',issue:number,reason,binding:reason==='manual_e2e'?issueBinding(issue):await diffBinding(current,execute),approvedAt:Date.now(),e2e:reason==='manual_e2e'?{specs:['auth'],projects:['chromium','mobile-chrome']}:null}));};
  const save=()=>saveJson(join(stateDir,'state.json'),state);
- const run=()=>worker({config:{...configuration({}),stateDir,repo:'test/repo'},root:clone,mode:'once',expectedIssue:number,continueAfterHuman:true,approval,execute,report:()=>{},run:()=>assert.fail('Publish-stage resume reran Codex')});
+ const run=(options={})=>worker({config:{...configuration({}),stateDir,repo:'test/repo'},root:clone,mode:'once',expectedIssue:number,continueAfterHuman:true,approval,execute,report:()=>{},run:()=>assert.fail('Publish-stage resume reran Codex'),...options});
  const change=async(name,content='reviewed\n')=>{await mkdir(join(worktree,name,'..'),{recursive:true});await writeFile(join(worktree,name),content);};
  t.after(()=>rm(root,{recursive:true,force:true}));return {root,clone,stateDir,current,state,issue,approval,approve,save,run,change,calls,execute,git,worktree,base};
 }
@@ -137,4 +140,37 @@ test('E2E scope is enum-only and requires pinned local config; no lifecycle hook
  await writeFile(join(f.worktree,'playwright.config.ts'),'export default { retries: 99 }');await assert.rejects(assertE2ePlan(f.worktree,scripts,'care-record-v1',scope));
  const descriptor={version:1,profile:'care-record-v1',repo:'test/repo',clonePath:f.clone,stateDirectory:f.stateDir,expectedIssue:48,approval:{repositoryId:'test--repo',repo:'test/repo',grants:[]}};
  assert.equal(parseDispatchDescriptor(descriptor),descriptor);await f.approve(['manual_e2e']);assert.throws(()=>parseDispatchDescriptor({...descriptor,approval:{...descriptor.approval,grants:[{...f.approval.grants[0],issue:47}]}}));
+});
+
+for (const parked of [false, true]) test(`local verification resumes the saved #59 session without grants, ready label or Resume (parked=${parked})`,async t=>{
+ const f=await fixture(t,59,true);await f.change('example.txt','implementation\n');
+ f.current.stage='implement';f.current.result={...result,status:'needs_human',safe_to_open_pr:false,reasons:[{category:'local_verification',check:'test:ui'},{category:'sandbox_capability',check:'test:ui'}]};
+ const recovery={issue:issueBinding(f.issue),diff:await diffBinding(f.current,f.execute)};
+ if(parked){f.state.humanWaiting=[{current:f.current,reason:'needs_human',since:1}];f.state.current=null;f.state.status='idle';f.state.paused=false;}
+ await f.save();const state=await f.run({approval:undefined,recovery});assert.equal(state.status,'idle');assert.equal(state.current,null);
+ assert.ok(f.calls.some(([binary,args])=>binary==='npm'&&args.includes('test:ui')));
+ const saved=JSON.parse(await readFile(join(f.stateDir,'issue-59.json'),'utf8'));assert.equal(saved.session,'saved-session');assert.equal(saved.base,f.base);
+});
+test('mixed #59 operational and human categories only pass current isolated grants; changed bindings cannot recover',async t=>{
+ const f=await fixture(t,59);await f.change('example.txt','implementation\n');
+ const human=['db','auth','permission','tenant','manual_e2e','security'];f.current.humanReasons=[...human,'local_verification','sandbox_capability'];
+ f.current.result.reasons=[{category:'local_verification',check:'test:ui'},{category:'sandbox_capability',check:'test:ui'}];
+ const recovery={issue:issueBinding(f.issue),diff:await diffBinding(f.current,f.execute)};await f.approve(human.filter(r=>r!=='security'));await f.save();
+ assert.equal((await f.run({recovery})).status,'needs-human');assert.ok(!f.calls.some(([b,a])=>b==='npm'&&a.includes('test:ui')));
+ await f.approve(['security']);await f.change('example.txt','changed\n');await f.save();assert.equal((await f.run({recovery})).status,'needs-human');
+ f.issue.body+='changed';assert.equal((await f.run({recovery})).status,'needs-human');
+});
+test('retry limit is reverified once, never bypassed; exhaustion persists and cannot loop after restart',async t=>{
+ const f=await fixture(t,47);await f.change('example.txt','implementation\n');f.current.failures=1;
+ f.current.humanReasons=['verification_retry_limit','local_verification'];f.current.repair={category:'local_verification',check:'lint',diagnostic:'type_error'};
+ const recovery={issue:issueBinding(f.issue),diff:await diffBinding(f.current,f.execute)};await f.save();
+ const execute=async(b,a,o)=>{if(b==='npm'&&a.includes('lint'))throw new CommandFailure({type:true});return f.execute(b,a,o);};
+ const state=await f.run({approval:undefined,recovery,execute});assert.equal(state.lastReason,'verification_retry_exhausted');assert.equal(state.current.failures,1);assert.equal(recoveryState(state.current),'human_investigation_required');
+ assert.equal((await f.run({approval:undefined,recovery,execute})).status,'needs-human');assert.ok(!f.calls.some(([b,a])=>b==='git'&&a[0]==='push'));
+});
+test('operational recovery descriptor rejects commands, wrong binding kinds and unknown fields',()=>{
+ const base={version:1,profile:'care-record-v1',repo:'test/repo',clonePath:'/tmp/clone',stateDirectory:'/tmp/state',expectedIssue:59};
+ const recovery={issue:issueBinding({body:'safe'}),diff:{kind:'diff',base:'a'.repeat(40),head:'a'.repeat(40),diffDigest:'b'.repeat(64)}};
+ assert.deepEqual(parseDispatchDescriptor({...base,recovery}).recovery,recovery);
+ for(const bad of [{...recovery,command:'echo hacked'}, {...recovery,diff:recovery.issue}, {...recovery,issue:{...recovery.issue,issueDigest:'invalid'}}])assert.throws(()=>parseDispatchDescriptor({...base,recovery:bad}));
 });

@@ -107,3 +107,12 @@ test('HTTP approval uses existing authentication/Origin/CSRF and exposes only a 
  assert.deepEqual(await (await fetch(server.origin+'/api/requests/'+command.requestId,{headers:{Cookie:cookie}})).json(),ack);
  const snapshot=await (await fetch(server.origin+'/api/status',{headers:{Cookie:cookie}})).text();assert.ok(snapshot.includes('approved'));for(const value of [f.repo.stateDirectory,f.issue.body,'diffDigest','issueDigest','session'])assert.ok(!snapshot.includes(value));
 });
+
+test('operational blockers never project Approval missing or accept grants; fixed recovery is separate',async t=>{
+ const f=await fixture(t,59);await f.prepare();await writeFile(join(f.worktree,'file.txt'),'implemented\n');
+ f.current.result={reasons:[{category:'local_verification',check:'test:ui'},{category:'sandbox_capability',check:'test:ui'}]};await f.save();
+ let job=(await f.approvals.project(await collectSnapshot(f.registry))).repositories[0]!.current!;
+ assert.deepEqual(job.approvals,[]);assert.equal(job.recovery,'automatic_retry_pending');
+ for(const reason of ['local_verification','sandbox_capability','verification_retry_limit'])await assert.rejects(async()=>f.approvals.apply(f.request(reason)));
+ f.current.recoveryStatus='investigation';await f.save();job=(await f.approvals.project(await collectSnapshot(f.registry))).repositories[0]!.current!;assert.equal(job.recovery,'human_investigation_required');
+});

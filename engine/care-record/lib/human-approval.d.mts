@@ -17,3 +17,7 @@ export function issueBinding(issue:{body?:string}):IssueBinding;
 export function diffBinding(current:{base?:unknown;worktree:string;branch:string},execute:(binary:string,args:string[],options?:{cwd?:string})=>Promise<string>):Promise<DiffBinding>;
 export function changedFiles(current:{base?:unknown;worktree:string},execute:(binary:string,args:string[],options?:{cwd?:string})=>Promise<string>):Promise<string[]>;
 export function protectedReasons(current:{base?:unknown;worktree:string},execute:(binary:string,args:string[],options?:{cwd?:string})=>Promise<string>,profile:string):Promise<string[]>;
+
+export const operationalReasons: readonly string[];
+export function recoveryState(current:unknown):'automatic_retry_pending'|'human_investigation_required'|null;
+export function parseRecovery(value:unknown):{issue:IssueBinding;diff:DiffBinding};

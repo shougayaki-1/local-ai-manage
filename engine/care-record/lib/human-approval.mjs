@@ -7,6 +7,7 @@ import { managerProtected } from '../profiles.mjs';
 
 // Only these review gates are grantable. Production/credentials/deployment,
 // destructive operations and worktree/sandbox safety are never grants.
+export const operationalReasons = Object.freeze(['local_verification', 'sandbox_capability', 'verification_retry_limit']);
 export const approvableReasons = Object.freeze(['db', 'auth', 'permission', 'tenant', 'security', 'retention', 'manual_e2e']);
 export const e2eSpecs = Object.freeze(['auth', 'workspace-routing', 'staff-features', 'tenant-isolation', 'admin-features', 'integration-flow', 'recovery', 'record-feed', 'record-routing', 'record-ui', 'password-recovery']);
 export const e2eProjects = Object.freeze(['chromium', 'mobile-chrome']);
@@ -38,7 +39,7 @@ export function parseGrant(value) {
   return { ...value, binding, e2e: value.reason === 'manual_e2e' ? parseE2e(value.e2e) : null };
 }
 export function pendingReasons(current) {
-  return [...new Set([...(current?.humanReasons ?? []), current?.preflight?.category, ...(current?.result?.reasons ?? []).map(item => item.category)]
+  return [...new Set([...(current?.humanReasons ?? []), current?.preflight?.category, current?.repair?.category, ...(current?.result?.reasons ?? []).map(item => item.category)]
     .filter(reason => reasonCategories.includes(reason)))];
 }
 export function guardReasons(changed, profile = 'care-record-v1', patch = '') {
@@ -143,4 +144,22 @@ export async function protectedReasons(current, execute, profile) {
     } finally { await file.close(); }
   }
   return guardReasons(changed, profile, patch);
+}
+
+// Recovery is a verification capability, never a human approval or a command input.
+export function recoveryState(current) {
+  const reasons = pendingReasons(current);
+  if (!reasons.some(reason => operationalReasons.includes(reason))) return null;
+  if (current.recoveryStatus === 'investigation') return 'human_investigation_required';
+  const supplied = current.result?.reasons ?? [];
+  const checks = [...(current.verificationChecks ?? []), ...(current.repair ? [current.repair.check] : []),
+    ...supplied.filter(reason => operationalReasons.includes(reason.category)).map(reason => reason.check)];
+  if (!current.base || !checks.length || checks.some(check => !['typecheck','lint','test','test:unit','test:ui','build','test:codex-worker','test:ci-scope','diff-check'].includes(check))) return 'human_investigation_required';
+  return 'automatic_retry_pending';
+}
+export function parseRecovery(value) {
+  if (!exact(value, ['issue', 'diff'])) throw new Error('invalid_recovery');
+  const issue = parseBinding(value.issue), diff = parseBinding(value.diff);
+  if (issue.kind !== 'issue' || diff.kind !== 'diff') throw new Error('invalid_recovery');
+  return {issue, diff};
 }

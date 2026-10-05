@@ -147,3 +147,13 @@ test('approved parked jobs keep manual worker pause and active current precedenc
  repo.paused=false;repo.current={...repo.humanWaiting[0]!.job,issue:58,stage:'implement',approvals:[]};await scheduler.tick();await scheduler.settled();assert.deepEqual(calls,[58]);
  repo.current=null;f.clock.now+=30000;await scheduler.tick();await scheduler.settled();assert.deepEqual(calls,[58,48]);
 });
+
+test('operational retry is scheduled without a ready queue or manual Resume; investigation and missing/stale human reviews block',async t=>{
+ const f=await fixture();f.snapshot.queue.items=[];f.snapshot.queue.repositories.forEach(q=>q.items=[]);
+ const repo=f.snapshot.repositories[0]!;repo.status='needs-human';repo.paused=true;repo.current={issue:59,stage:'implement',failures:0,quotaWaits:0,model:null,effort:null,reasonCategories:['local_verification','sandbox_capability','db','auth','permission','tenant','manual_e2e','security'],check:'test:ui',prUrl:null,recovery:'automatic_retry_pending',approvals:['db','auth','permission','tenant','manual_e2e','security'].map(reason=>({reason,status:'approved',approvable:true}))};
+ let count=0;const scheduler=await Scheduler.create({...f,snapshot:async()=>f.snapshot,now:()=>f.clock.now,dispatch:async(_id,issue)=>{count++;return outcome(issue);}});
+ t.after(async()=>{await scheduler.close();await f.controller.close();await rm(f.root,{recursive:true,force:true});});
+ await f.resume();repo.current.approvals![0]!.status='stale';await scheduler.tick();assert.equal(count,0);
+ repo.current.approvals![0]!.status='approved';repo.current.recovery='human_investigation_required';await scheduler.tick();assert.equal(count,0);
+ repo.current.recovery='automatic_retry_pending';await scheduler.tick();await scheduler.settled();assert.equal(count,1);
+});

@@ -8,7 +8,7 @@ import { registryFingerprint, loadHandoff } from './handoff.ts';
 import { record } from './registry.ts';
 import { readPrivateJson } from './snapshot.ts';
 import { ghRead, queueMetadata, type GitHubRead } from './github-queue.ts';
-import { approvableReasons, parseGrant, parseE2e, pendingReasons, approvalStatus, issueBinding, diffBinding, protectedReasons, type Grant, type Binding, type E2eScope } from './approval-policy.ts';
+import { operationalReasons, recoveryState, approvableReasons, parseGrant, parseE2e, pendingReasons, approvalStatus, issueBinding, diffBinding, protectedReasons, type Grant, type Binding, type E2eScope } from './approval-policy.ts';
 import type { Registry, Repository, Snapshot, Job } from './types.ts';
 
 export interface ApprovalRequest {requestId:string;expectedRevision:number;repositoryId:string;issue:number;reason:string;e2e:E2eScope|null}
@@ -70,7 +70,7 @@ export class Approvals {
   if(typeof current.worktree!=='string'||current.worktree!==join(repo.stateDirectory,'worktrees',`issue-${issue}`)||typeof current.branch!=='string'||!current.branch.startsWith(`codex/issue-${issue}-`))throw new ControlError('approval_worktree_unsafe',409);
   return current as Record<string,unknown>&{number:number;worktree:string;branch:string};
  }
- private async scope(repo:Repository,number:number){
+ async scope(repo:Repository,number:number){
   const current=await this.current(repo,number);const handoffs=await loadHandoff(join(this.controller.directoryPath(),'handoff.json'),this.registry);
   const profile=handoffs.find(item=>item.repositoryId===repo.id)?.profile;if(!profile)throw new ControlError('approval_requires_managed_repository',409);
   const raw=(await readPrivateJson(join(repo.stateDirectory,'state.json'))).value;
@@ -138,6 +138,7 @@ export class Approvals {
   let scope:Awaited<ReturnType<Approvals['scope']>>|null=null;
   try{scope=await this.scope(repo,job.issue);}catch{/* Unverified scope never claims approval. */}
   if(scope)job.reasonCategories=scope.reasons;
-  job.approvals=job.reasonCategories.map(reason=>({reason,status:scope?approvalStatus(this.grants(),repo.id,repo.repo,job.issue,reason,reason==='manual_e2e'?scope.bindings.issue:scope.bindings.diff):this.grants().some(grant=>grant.repositoryId===repo.id&&grant.issue===job.issue&&grant.reason===reason)?'stale':'missing',approvable:approvableReasons.includes(reason)&&!(reason==='manual_e2e'&&scope?.profile!=='care-record-v1')}));
+  job.recovery=scope?recoveryState(scope.current)??undefined:job.reasonCategories.some(reason=>operationalReasons.includes(reason))?'human_investigation_required':undefined;
+  job.approvals=job.reasonCategories.filter(reason=>approvableReasons.includes(reason)).map(reason=>({reason,status:scope?approvalStatus(this.grants(),repo.id,repo.repo,job.issue,reason,reason==='manual_e2e'?scope.bindings.issue:scope.bindings.diff):this.grants().some(grant=>grant.repositoryId===repo.id&&grant.issue===job.issue&&grant.reason===reason)?'stale':'missing',approvable:approvableReasons.includes(reason)&&!(reason==='manual_e2e'&&scope?.profile!=='care-record-v1')}));
  }
 }
