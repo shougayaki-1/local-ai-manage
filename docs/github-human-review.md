@@ -33,6 +33,8 @@ comment の安全な表示は category/status、固定 check、Worker waiting/re
 
 specification は grant 対象ではない。owner が **Issue 本文**に canonical decision を記録し、その変更後に current request に 👍 を付けると、Issue digest/revision 時刻の変化と saved diff の一致を確認して一度だけ再評価する。古い 👍、本文変更のない 👍 はトリガーにしない。GitHub の秒単位時刻で順序が不明な場合も受理せず、本文更新より後の秒の reaction を要求する。canonical spec ファイルの変更検出は本版では自動読取せず、決定を Issue 本文に記録する。自由文コメントは仕様の正本にしない。
 
+仕様と human approvable blocker が共存するときは、仕様再評価トリガーを保存し、更新後の Issue に束縛した current request を同じ comment へ表示する。その新しい request の確認済み範囲へ改めて 👍 を付けるまで human grant を作らず、再開しない。仕様更新の反応を他カテゴリの承認へ転用しない。
+
 worker は同じ saved session/worktree/base を保ち、再評価した Issue digest を private state に保存して replay を拒否する。仕様確認を approval 扱いせず、Codex が再び specification を返せば停止し、同じ comment を次の decision request に更新する。他の human guard、有限 verification repair、必須 checks は維持する。
 
 local_verification / sandbox_capability / verification_retry_limit は #7 の固定 parent verification に従い、👍 を要求しない。automatic retry または failed / human investigation を表示する。production/deploy/credential/destructive/auto-merge の権限は追加しない。実装により sandbox/network 制約を変更しない。

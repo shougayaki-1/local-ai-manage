@@ -151,3 +151,11 @@ test('unsupported manual E2E profile never displays an approval operation or con
  await writeFile(join(f.repo.stateDirectory,'state.json'),JSON.stringify({...f.saved,profile:'local-ai-manage-v1'}),{mode:0o600});await f.tick();f.thumb();await f.tick();
  const body=f.comments.get(101)!.body;assert.match(body,/not approvable/);assert.ok(!body.includes('承認対象'));assert.equal(f.approvals.revision(),0);
 });
+
+test('specification plus manual E2E renews the current request after a decision; a separate fresh approval unblocks reevaluation',async t=>{
+ const f=await fixture(t,['specification','manual_e2e','security'],{specs:['auth'],projects:['chromium']});await f.tick();f.thumb();await f.tick();assert.equal(f.approvals.revision(),2);
+ const before=(await f.document()).requests[0].requestId;f.clock.now+=1000;f.issue.body+=' canonical decision';f.issue.updated_at=new Date(f.clock.now).toISOString();f.thumb();await f.tick();
+ const renewed=(await f.document()).requests[0];assert.notEqual(renewed.requestId,before);assert.equal(renewed.reevaluation.requestId,renewed.requestId);assert.equal(f.approvals.revision(),2);assert.equal((await f.snapshot()).repositories[0]!.current!.githubReviewReady,false);
+ await f.restart();await f.tick();assert.equal(f.approvals.revision(),2);assert.match(f.comments.get(101)!.body,/manual_e2e: stale/);
+ f.thumb();await f.tick();assert.equal(f.approvals.revision(),4);assert.equal((await f.snapshot()).repositories[0]!.current!.githubReviewReady,true);assert.ok(await readReevaluation(f.controller.directoryPath(),f.registry,f.repo.id,59));assert.equal(f.posts,1);
+});

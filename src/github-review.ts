@@ -58,7 +58,7 @@ export function parseReviewState(value:unknown,registry:Registry):ReviewState {
   const commandReasons=new Set<string>();
   for(const command of raw.commands){const parsed=parseApproval(command,registry);if(parsed.repositoryId!==raw.repositoryId||parsed.issue!==raw.issue||!raw.reasons.includes(parsed.reason)||commandReasons.has(parsed.reason)||!same(parsed.e2e,parsed.reason==='manual_e2e'?raw.e2e:null))throw new Error('review_state_invalid');commandReasons.add(parsed.reason);}
   if(!Array.isArray(raw.baselineApprovalIds)||raw.baselineApprovalIds.length>approvableReasons.length||raw.baselineApprovalIds.some(item=>!exact(item,['reason','requestId'])||typeof item.reason!=='string'||!approvableReasons.includes(item.reason)||!(raw.reasons as unknown[]).includes(item.reason)||(item.requestId!==null&&!uuid(item.requestId)))||new Set(raw.baselineApprovalIds.map(item=>item.reason)).size!==raw.baselineApprovalIds.length)throw new Error('review_state_invalid');
-  if(raw.reevaluation!==null){const trigger=parseReevaluation(raw.reevaluation);if(!raw.reasons.includes('specification')||trigger.requestId!==raw.requestId||trigger.previousIssueDigest!==(binding.issue as {issueDigest:string}).issueDigest||!same(trigger.diff,binding.diff??null))throw new Error('review_state_invalid');}
+  if(raw.reevaluation!==null){const trigger=parseReevaluation(raw.reevaluation);if(!raw.reasons.includes('specification')||trigger.requestId!==raw.requestId||(!same(trigger.issue,binding.issue)&&trigger.previousIssueDigest!==(binding.issue as {issueDigest:string}).issueDigest)||!same(trigger.diff,binding.diff??null))throw new Error('review_state_invalid');}
   const key=`${raw.repositoryId}:${raw.issue}`;if(requestIds.has(raw.requestId as string)||seen.has(key)||raw.commentId!==null&&comments.has(raw.commentId as number))throw new Error('review_state_invalid');seen.add(key);requestIds.add(raw.requestId as string);if(raw.commentId!==null)comments.add(raw.commentId as number);
   return raw as unknown as ReviewRequest;
  });
@@ -131,12 +131,13 @@ export class GitHubReviews {
   for(const item of result){const baseline=request?.baselineApprovalIds.find(entry=>entry.reason===item.reason);if(item.status==='approved'&&baseline&&this.approvals.latestId(repo.id,job.issue,item.reason)===baseline.requestId)item.status='stale';}
   return result;
  }
- private async renew(repo:Repository,job:Job,scope:Awaited<ReturnType<Approvals['scope']>>,old?:ReviewRequest){
+ private async renew(repo:Repository,job:Job,scope:Awaited<ReturnType<Approvals['scope']>>,old?:ReviewRequest,reevaluation?:Reevaluation){
   const identity=await this.identity(repo);
   if(old){const raw=await this.api('GET',`repos/${repo.repo}/issues/comments/${old.commentId}`);this.comment(raw,repo,old);if(old.authorId!==identity.authorId)throw new Error('review_author_changed');}
   const ignored=old?(await this.reactions(repo,old.commentId!)).map(item=>item.id):[];
   const baselineApprovalIds=old?scope.reasons.filter(reason=>approvableReasons.includes(reason)).map(reason=>({reason,requestId:this.approvals.latestId(repo.id,job.issue,reason)})):[];
   const request:ReviewRequest={requestId:randomUUID(),repositoryId:repo.id,issue:job.issue,bindings:scope.bindings,reasons:scope.reasons,e2e:scope.profile==='care-record-v1'&&scope.reasons.includes('manual_e2e')&&repo.githubReview?.e2e?parseE2e(repo.githubReview.e2e):null,authorId:identity.authorId,commentId:old?.commentId??null,createdAt:this.clock(),ignoredReactionIds:ignored,published:false,statuses:await this.statuses(repo,job,scope,{baselineApprovalIds}),worker:'waiting',check:job.check,commands:[],baselineApprovalIds,reevaluation:null};
+  if(reevaluation){request.reevaluation=parseReevaluation({...reevaluation,requestId:request.requestId});for(const item of request.statuses)if(item.reason==='specification')item.status='reevaluating';}
   await this.publish(repo,request,true);return request;
  }
  tick(snapshot:Snapshot):Promise<void>{if(this.stopped)return Promise.resolve();if(this.ticking)return this.ticking;this.ticking=this.step(snapshot).finally(()=>{this.ticking=null;});return this.ticking;}
@@ -170,7 +171,9 @@ export class GitHubReviews {
     const accepted=reactions.some(item=>item.content==='+1'&&identity.reviewerIds.includes(item.actorId)&&!request!.ignoredReactionIds.includes(item.id)&&item.at>request!.createdAt&&(!spec||issueMatches||scope.issueUpdatedAt!==null&&item.at>scope.issueUpdatedAt));
     if(accepted){
      if(spec&&!issueMatches&&!request.reevaluation){
-      request=structuredClone(request);request.reevaluation=parseReevaluation({requestId:request.requestId,issue:scope.bindings.issue,previousIssueDigest:(request.bindings.issue as {issueDigest:string}).issueDigest,diff:scope.bindings.diff??null});await this.save(request);
+      const trigger=parseReevaluation({requestId:request.requestId,issue:scope.bindings.issue,previousIssueDigest:(request.bindings.issue as {issueDigest:string}).issueDigest,diff:scope.bindings.diff??null});
+      if(scope.reasons.some(reason=>approvableReasons.includes(reason))){await this.renew(repo,job,scope,request,trigger);continue;}
+      request=structuredClone(request);request.reevaluation=trigger;await this.save(request);
      }else if(issueMatches){
       for(const status of request.statuses.filter(item=>approvableReasons.includes(item.reason)&&['missing','stale'].includes(item.status))){
        let command=request.commands.find(item=>item.reason===status.reason);
