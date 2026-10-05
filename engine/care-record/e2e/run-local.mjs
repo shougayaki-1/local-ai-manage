@@ -1,7 +1,7 @@
 import { createServer } from 'node:net';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, lstatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { assertLocalSupabaseEnvironment } from './local-environment.mjs';
@@ -10,24 +10,33 @@ import { parseE2e } from '../lib/human-approval.mjs';
 const repoRoot = resolve(process.argv[2]);
 const sourceSupabaseDir = resolve(repoRoot, 'supabase');
 const scope = parseE2e(JSON.parse(process.argv[3]));
+const dbTests=process.argv[4]==='--db-tests';
+if(process.argv.length>5||process.argv[4]!==undefined&&!dbTests)throw new Error('Invalid local verification mode');
+let stopping=false;let activeChild;
+for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>{stopping=true;activeChild?.kill('SIGTERM');});
 const playwrightArgs = ['test', ...scope.specs.map(spec => `tests/${spec}.spec.ts`),
   ...scope.projects.map(project => `--project=${project}`), '--retries=0', '--forbid-only', '--reporter=json'];
 
 assertLocalSupabaseEnvironment(process.env, { requireApi: false });
 
-function run(command, args, options = {}) {
-  const result = spawnSync(command, args, {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    env: options.env ?? process.env,
-    stdio: options.inherit ? 'inherit' : 'pipe',
-  });
-
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    throw new Error('Local E2E prerequisite failed; output omitted');
-  }
-  return result.stdout ?? '';
+async function run(binary,args,options={}) {
+ if(stopping&&!options.cleanup)throw new Error('Local verification interrupted');
+ return await new Promise((resolveRun,reject)=>{
+  const child=spawn(binary,args,{cwd:options.cwd??(binary==='supabase'?workdir:repoRoot),env:options.env??process.env,stdio:['pipe','pipe','pipe']});
+  child.stdin.on('error',()=>{});child.stdin.end(options.input);
+  activeChild=child;let output='';let bytes=0;let exceeded=false;
+  const inspect=chunk=>{bytes+=chunk.length;if(bytes>20_000_000){exceeded=true;child.kill('SIGTERM');}};
+  child.stdout.on('data',chunk=>{inspect(chunk);if(!exceeded)output+=chunk;});child.stderr.on('data',inspect);
+  const timeout=setTimeout(()=>{exceeded=true;child.kill('SIGTERM');},options.cleanup?20000:900000);
+  child.once('error',()=>{clearTimeout(timeout);reject(new Error('Local verification prerequisite unavailable'));});
+  child.once('close',code=>{clearTimeout(timeout);if(activeChild===child)activeChild=null;if(code===0&&!exceeded&&(options.cleanup||!stopping))resolveRun(output);else {const error=new Error('Local verification failed; output omitted');error.assertions=[...output.matchAll(/(?:^|\n)\s*not ok\s+(\d+)/g)].map(match=>Number(match[1])).filter(number=>number>0&&number<=100000).slice(0,32);reject(error);}});
+ });
+}
+function copyRegularTree(source,target){
+ const info=lstatSync(source);if(info.isSymbolicLink())throw new Error('Unsafe verification input');
+ if(info.isDirectory()){mkdirSync(target,{recursive:true});for(const name of readdirSync(source))copyRegularTree(resolve(source,name),resolve(target,name));}
+ else if(info.isFile()&&info.size<=1048576)copyFileSync(source,target);
+ else throw new Error('Unsafe verification input');
 }
 
 async function freePort(usedPorts) {
@@ -46,8 +55,8 @@ async function freePort(usedPorts) {
 
 async function writeIsolatedConfig(workdir) {
   const usedPorts = new Set();
-  const configPath = resolve(sourceSupabaseDir, 'config.toml');
-  let config = readFileSync(configPath, 'utf8');
+  const configPath = new URL('./supabase.config.toml.reference',import.meta.url);
+  let config = readFileSync(configPath, 'utf8').replace(/(\[db\.seed\][\s\S]*?enabled\s*=\s*)true/, '$1false');
   const projectId = `care-record-e2e-${randomUUID().replaceAll('-', '').slice(0, 10)}`;
   config = config.replace(/^project_id\s*=\s*"[^"]+"/m, `project_id = "${projectId}"`);
 
@@ -64,11 +73,12 @@ async function writeIsolatedConfig(workdir) {
   writeFileSync(resolve(supabaseDir, 'config.toml'), config);
   for (const entry of readdirSync(resolve(sourceSupabaseDir, 'migrations'), { withFileTypes: true })) {
     if (entry.isFile() && entry.name.endsWith('.sql')) {
-      copyFileSync(resolve(sourceSupabaseDir, 'migrations', entry.name), resolve(migrationsDir, entry.name));
+      copyRegularTree(resolve(sourceSupabaseDir,'migrations',entry.name),resolve(migrationsDir,entry.name));
     }
   }
   const templatesDir = resolve(sourceSupabaseDir, 'templates');
-  if (existsSync(templatesDir)) cpSync(templatesDir, resolve(supabaseDir, 'templates'), { recursive: true });
+  if(existsSync(templatesDir))copyRegularTree(templatesDir,resolve(supabaseDir,'templates'));
+  if(dbTests){const tests=resolve(sourceSupabaseDir,'tests');mkdirSync(resolve(supabaseDir,'tests'));for(const entry of readdirSync(tests,{withFileTypes:true}))if(entry.name.endsWith('.test.sql'))copyRegularTree(resolve(tests,entry.name),resolve(supabaseDir,'tests',entry.name));if(!readdirSync(resolve(supabaseDir,'tests')).length)throw new Error('No DB tests');}
   return projectId;
 }
 
@@ -96,16 +106,21 @@ let workdir;
 let projectId;
 let exitCode = 1;
 let stackStartAttempted = false;
+let phase='prepare';
+const progress=value=>{phase=value;process.stdout.write(JSON.stringify({event:'local-verification',phase})+'\n');};
+let cleanupSucceeded=true;
 
 try {
   workdir = mkdtempSync(resolve(tmpdir(), 'care-record-e2e-'));
   projectId = await writeIsolatedConfig(workdir);
 
   stackStartAttempted = true;
-  run('supabase', ['start', '--workdir', workdir]);
-  run('supabase', ['db', 'reset', '--local', '--no-seed', '--workdir', workdir]);
+  progress('start');
+  await run('supabase', ['start', '--workdir', workdir]);
+  progress('migrations');
+  await run('supabase', ['db', 'reset', '--local', '--no-seed', '--workdir', workdir]);
 
-  const localConfig = parseSupabaseEnv(run('supabase', ['status', '-o', 'env', '--workdir', workdir]));
+  const localConfig = parseSupabaseEnv(await run('supabase', ['status', '-o', 'env', '--workdir', workdir]));
   const supabaseEnv = {
     ...process.env,
     APP_ENV: 'test',
@@ -124,16 +139,33 @@ try {
     throw new Error('Supabase CLI did not return the local API keys and database URL required for E2E tests.');
   }
 
-  const result = spawnSync('npx', ['--no-install', 'playwright', ...playwrightArgs], {
-    cwd: repoRoot,
-    env: supabaseEnv,
-    stdio: 'pipe',
-    encoding: 'utf8',
-  });
-  if (result.error) throw result.error;
-  exitCode = result.status ?? 1;
-  if (exitCode === 0) {
-    const report = JSON.parse(result.stdout);
+  if(dbTests){
+    progress('db-tests');
+    const paths=readdirSync(resolve(workdir,'supabase/tests')).map(name=>resolve(workdir,'supabase/tests',name));
+    for(const path of paths){try{await run('supabase',['test','db',path,'--workdir',workdir]);}catch(error){const name=path.split('/').at(-1);if(/^[a-z_]+\.test\.sql$/.test(name))process.stderr.write(`Local DB test failed: ${name}; assertions: ${(error.assertions??[]).join(',')}\n`);throw error;}}
+    progress('isolation');
+    const isolation=resolve(sourceSupabaseDir,'tests/isolation/specs');
+    if(existsSync(isolation)){
+      const tester=(await run('docker',['exec',`supabase_db_${projectId}`,'sh','-c','find /usr/lib/postgresql /usr/local -type f -name isolationtester -print -quit'])).trim();
+      if(!/^\/(?:usr\/lib\/postgresql|usr\/local)\/[A-Za-z0-9_./-]*\/isolationtester$/.test(tester)||tester.includes('..'))throw new Error('Local isolation tester unavailable');
+      for(const name of readdirSync(isolation).filter(name=>name.endsWith('.spec')).sort()){
+        const spec=resolve(isolation,name);if(!lstatSync(spec).isFile()||lstatSync(spec).isSymbolicLink()||lstatSync(spec).size>1048576)throw new Error('Unsafe isolation input');
+        const output=await run('docker',['exec','-i',`supabase_db_${projectId}`,tester,'dbname=postgres user=postgres'],{input:readFileSync(spec)});
+        if(/ERROR:|FATAL:|syntax error|deadlock detected/i.test(output)||!/<waiting \.\.\.>|completed/.test(output))throw new Error('Local isolation test failed');
+      }
+    }
+    progress('db-types');
+    const generated=await run('supabase',['gen','types','typescript','--local','--schema','public','--workdir',workdir]);
+    const expectedPath=resolve(repoRoot,'src/types/database.generated.ts');
+    if(!lstatSync(expectedPath).isFile()||lstatSync(expectedPath).isSymbolicLink())throw new Error('Unsafe type input');
+    const normalize=value=>value.replace(/\r\n/g,'\n').trim();
+    if(normalize(generated)!==normalize(readFileSync(expectedPath,'utf8')))throw new Error('Generated DB types differ');
+  }
+  progress('e2e');
+  const output=await run('npx',['--no-install','playwright',...playwrightArgs],{env:supabaseEnv});
+  exitCode=0;
+  if(exitCode===0){
+    const report=JSON.parse(output);
     let count = 0;
     const inspect = suites => {
       for (const suite of suites) {
@@ -148,18 +180,20 @@ try {
     if (!count) throw new Error('No E2E tests executed');
   }
 } catch (error) {
-  process.stderr.write('Local E2E verification failed; output omitted\n');
+  process.stderr.write(`Local verification failed at ${phase}; output omitted\n`);
   exitCode = 1;
 } finally {
   if (stackStartAttempted && workdir && projectId) {
     try {
-      run('supabase', ['stop', '--no-backup', '--workdir', workdir]);
+      progress('cleanup');
+      await run('supabase', ['stop', '--no-backup', '--workdir', workdir],{cleanup:true});
     } catch (error) {
+      cleanupSucceeded=false;
       process.stderr.write('Local E2E cleanup failed; output omitted\n');
       exitCode = exitCode === 0 ? 1 : exitCode;
     }
   }
-  if (workdir) rmSync(workdir, { recursive: true, force: true });
+  if (workdir && cleanupSucceeded) rmSync(workdir, { recursive: true, force: true });
 }
 
 process.exitCode = exitCode;

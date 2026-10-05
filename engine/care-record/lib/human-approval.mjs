@@ -177,3 +177,7 @@ export function parseReviewBinding(value) {
   if(issue.kind!=='issue'||diff&&diff.kind!=='diff')throw new Error('invalid_review_binding');
   return {issue,diff};
 }
+// Trusted opt-in policy; never selected from Issue text or worker output.
+export const automaticReviewReasons=Object.freeze([...approvableReasons]);
+export const automaticReviewEligible=reasons=>Array.isArray(reasons)&&reasons.length>0&&reasons.every(reason=>automaticReviewReasons.includes(reason));
+export const automaticReason=(policy,profile,reason)=>policy==='local-automatic'&&profile==='care-record-v1'&&automaticReviewReasons.includes(reason);

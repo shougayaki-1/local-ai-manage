@@ -8,7 +8,7 @@ import { registryFingerprint, loadHandoff } from './handoff.ts';
 import { record } from './registry.ts';
 import { readPrivateJson } from './snapshot.ts';
 import { ghRead, queueMetadata, type GitHubRead } from './github-queue.ts';
-import { operationalReasons, recoveryState, approvableReasons, parseGrant, parseE2e, pendingReasons, approvalStatus, issueBinding, diffBinding, protectedReasons, type Grant, type Binding, type E2eScope } from './approval-policy.ts';
+import { automaticReason, operationalReasons, recoveryState, approvableReasons, parseGrant, parseE2e, pendingReasons, approvalStatus, issueBinding, diffBinding, protectedReasons, type Grant, type Binding, type E2eScope } from './approval-policy.ts';
 import type { Registry, Repository, Snapshot, Job } from './types.ts';
 
 export interface ApprovalRequest {requestId:string;expectedRevision:number;repositoryId:string;issue:number;reason:string;e2e:E2eScope|null}
@@ -145,6 +145,6 @@ export class Approvals {
   try{scope=await this.scope(repo,job.issue);}catch{/* Unverified scope never claims approval. */}
   if(scope)job.reasonCategories=scope.reasons;
   job.recovery=scope?recoveryState(scope.current)??undefined:job.reasonCategories.some(reason=>operationalReasons.includes(reason))?'human_investigation_required':undefined;
-  job.approvals=job.reasonCategories.filter(reason=>approvableReasons.includes(reason)).map(reason=>({reason,status:scope?approvalStatus(this.grants(),repo.id,repo.repo,job.issue,reason,reason==='manual_e2e'?scope.bindings.issue:scope.bindings.diff):this.grants().some(grant=>grant.repositoryId===repo.id&&grant.issue===job.issue&&grant.reason===reason)?'stale':'missing',approvable:approvableReasons.includes(reason)&&!(reason==='manual_e2e'&&scope?.profile!=='care-record-v1')}));
+  job.approvals=job.reasonCategories.filter(reason=>approvableReasons.includes(reason)).map(reason=>({reason,status:scope&&automaticReason(repo.reviewPolicy,scope.profile,reason)?'automatic':scope?approvalStatus(this.grants(),repo.id,repo.repo,job.issue,reason,reason==='manual_e2e'?scope.bindings.issue:scope.bindings.diff):this.grants().some(grant=>grant.repositoryId===repo.id&&grant.issue===job.issue&&grant.reason===reason)?'stale':'missing',approvable:!automaticReason(repo.reviewPolicy,scope?.profile,reason)&&approvableReasons.includes(reason)&&!(reason==='manual_e2e'&&scope?.profile!=='care-record-v1')}));
  }
 }

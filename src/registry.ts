@@ -6,14 +6,14 @@ import { promisify } from 'node:util';
 import type { Registry, Repository } from './types.ts';
 const execute = promisify(execFile);
 const repoPattern = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/;
-const keys = ['id','repo','clonePath','stateDirectory','enabled','ownership','defaultModel','defaultEffort','maximumConcurrency','githubReview'];
+const keys = ['id','repo','clonePath','stateDirectory','enabled','ownership','defaultModel','defaultEffort','maximumConcurrency','githubReview','reviewPolicy'];
 export const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const inside = (root: string, child: string) => { const p=relative(root,child); return p === '' || (!p.startsWith(`..${sep}`) && p !== '..' && !isAbsolute(p)); };
 export function parseRegistry(value: unknown): Registry {
   if (!record(value) || Object.keys(value).some(k=>!['version','globalConcurrency','repositories'].includes(k)) || value.version!==1 || value.globalConcurrency!==1 || !Array.isArray(value.repositories) || value.repositories.length>32) throw new Error('invalid_registry');
   const ids=new Set<string>(); const repos=new Set<string>();
   const repositories = value.repositories.map((item): Repository => {
-    if (!record(item) || Object.keys(item).some(k=>!keys.includes(k)) || typeof item.repo!=='string' || !repoPattern.test(item.repo) || item.repo.split('/').some(s=>s==='.'||s==='..') || item.id!==item.repo.toLowerCase().replace('/','--') || ids.has(String(item.id)) || repos.has(item.repo.toLowerCase()) || typeof item.enabled!=='boolean' || item.ownership!=='observe-only' || item.maximumConcurrency!==1 || item.defaultModel!=='gpt-6.1-sol' || !['low','medium','high','xhigh'].includes(String(item.defaultEffort)) || typeof item.clonePath!=='string' || !isAbsolute(item.clonePath) || typeof item.stateDirectory!=='string' || !isAbsolute(item.stateDirectory)) throw new Error('invalid_repository');
+    if (!record(item) || Object.keys(item).some(k=>!keys.includes(k)) || typeof item.repo!=='string' || !repoPattern.test(item.repo) || item.repo.split('/').some(s=>s==='.'||s==='..') || item.id!==item.repo.toLowerCase().replace('/','--') || ids.has(String(item.id)) || repos.has(item.repo.toLowerCase()) || typeof item.enabled!=='boolean' || item.ownership!=='observe-only' || item.maximumConcurrency!==1 || (item.reviewPolicy!==undefined&&!['manual','local-automatic'].includes(String(item.reviewPolicy))) || item.defaultModel!=='gpt-6.1-sol' || !['low','medium','high','xhigh'].includes(String(item.defaultEffort)) || typeof item.clonePath!=='string' || !isAbsolute(item.clonePath) || typeof item.stateDirectory!=='string' || !isAbsolute(item.stateDirectory)) throw new Error('invalid_repository');
     if(item.githubReview!==undefined){
       const review=item.githubReview;
       if(!record(review)||Object.keys(review).length!==2||!Object.hasOwn(review,'reviewerIds')||!Object.hasOwn(review,'e2e')||!Array.isArray(review.reviewerIds)||review.reviewerIds.length>32||review.reviewerIds.some(id=>!Number.isSafeInteger(id)||id<=0)||new Set(review.reviewerIds).size!==review.reviewerIds.length)throw new Error('invalid_github_review');

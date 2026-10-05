@@ -15,7 +15,7 @@ import type { Registry, Repository, Snapshot, Job } from './types.ts';
 
 const categories=[...approvableReasons,...operationalReasons,'specification','production','deploy','credential','external_service','destructive','worktree_safety'];
 const checks=['typecheck','lint','test','test:unit','test:ui','build','test:codex-worker','test:ci-scope','diff-check'];
-const states=['missing','approved','stale','automatic_retry_pending','human_investigation_required','decision_required','reevaluating','non_approvable','scope_required'] as const;
+const states=['missing','approved','stale','automatic','automatic_retry_pending','human_investigation_required','decision_required','reevaluating','non_approvable','scope_required'] as const;
 type ReviewStatus=typeof states[number];
 type Worker='waiting'|'resuming'|'running'|'idle';
 export interface ReviewRequest {
@@ -42,7 +42,7 @@ export const githubReviewApi:GitHubReviewApi=async(method,resource,payload)=>{
  });
 };
 export function reviewComment(request:ReviewRequest):string {
- const labels:Record<ReviewStatus,string>={missing:'approval required',approved:'approved',stale:'stale',automatic_retry_pending:'automatic retry',human_investigation_required:'verification failed / human investigation required',decision_required:'decision required',reevaluating:'reevaluating',non_approvable:'human investigation required / not approvable',scope_required:'explicit local E2E scope required'};
+ const labels:Record<ReviewStatus,string>={missing:'approval required',approved:'approved',stale:'stale',automatic:'automatic',automatic_retry_pending:'automatic retry',human_investigation_required:'verification failed / human investigation required',decision_required:'decision required',reevaluating:'reevaluating',non_approvable:'human investigation required / not approvable',scope_required:'explicit local E2E scope required'};
  const grantable=request.statuses.filter(item=>['missing','stale'].includes(item.status)&&approvableReasons.includes(item.reason)).map(item=>item.reason);
  return [`<!-- codex-worker-review: ${request.requestId} -->`,'Codex Worker Review','',`Scope: Issue #${request.issue} / ${request.bindings.diff?'current saved diff':'current Issue revision'}`,...request.statuses.map(item=>`- ${item.reason}: ${labels[item.status]}`),`- Worker: ${request.worker}`,...(request.check?[`- Check: ${request.check}`]:[]),...(request.e2e?[`Local E2E specs: ${request.e2e.specs.join(', ')}`,`Local E2E projects: ${request.e2e.projects.join(', ')} (retries=0)`]:[]),'',...(grantable.length?[`確認済みなら、この current request に 👍 を付けてください。承認対象: ${grantable.join(', ')}。`]:[]),...(request.reasons.includes('specification')?['仕様判断は Issue 本文へ記録してください。本文更新後の 👍 は保存作業の再評価トリガーであり、仕様の承認ではありません。']:[]),'operational blocker の承認操作は不要です。古い request の 👍 は再利用しません。'].join('\n');
 }
@@ -82,7 +82,7 @@ export async function readReevaluation(directory:string,registry:Registry,reposi
 export async function readReviewBinding(directory:string,registry:Registry,repositoryId:string,issue:number):Promise<ReturnType<typeof parseReviewBinding>|undefined> {
  const request=(await loadState(directory,registry)).requests.find(item=>item.repositoryId===repositoryId&&item.issue===issue);
  if(!request)return undefined;
- if(!request.published||!request.statuses.every(item=>['approved','automatic_retry_pending','reevaluating'].includes(item.status)))throw new Error('review_not_authorized');
+ if(!request.published||!request.statuses.every(item=>['approved','automatic','automatic_retry_pending','reevaluating'].includes(item.status)))throw new Error('review_not_authorized');
  return parseReviewBinding({issue:request.reevaluation?.issue??request.bindings.issue,diff:request.bindings.diff??null});
 }
 export class GitHubReviews {
@@ -127,7 +127,7 @@ export class GitHubReviews {
  private async statuses(repo:Repository,job:Job,scope:Awaited<ReturnType<Approvals['scope']>>,request?:Pick<ReviewRequest,'baselineApprovalIds'>):Promise<ReviewRequest['statuses']>{
   const projected=await this.approvals.project({schemaVersion:1,generatedAt:new Date(this.clock()).toISOString(),mode:'observe-only',controller:this.controller.view(),repositories:[{id:repo.id,repo:repo.repo,current:job,status:'needs-human',humanWaiting:[]}]} as unknown as Snapshot);
   const approvals=projected.repositories[0]!.current!.approvals??[];
-  const result:ReviewRequest['statuses']=scope.reasons.map(reason=>({reason,status:approvableReasons.includes(reason)?reason==='manual_e2e'&&scope.profile!=='care-record-v1'?'non_approvable':reason==='manual_e2e'&&!repo.githubReview?.e2e?'scope_required':approvals.find(item=>item.reason===reason)?.status??'missing':operationalReasons.includes(reason)?recoveryState(scope.current)??'human_investigation_required':reason==='specification'?'decision_required':'non_approvable'}));
+  const result:ReviewRequest['statuses']=scope.reasons.map(reason=>({reason,status:approvableReasons.includes(reason)?approvals.find(item=>item.reason===reason)?.status==='automatic'?'automatic':reason==='manual_e2e'&&scope.profile!=='care-record-v1'?'non_approvable':reason==='manual_e2e'&&!repo.githubReview?.e2e?'scope_required':approvals.find(item=>item.reason===reason)?.status??'missing':operationalReasons.includes(reason)?recoveryState(scope.current)??'human_investigation_required':reason==='specification'?'decision_required':'non_approvable'}));
   for(const item of result){const baseline=request?.baselineApprovalIds.find(entry=>entry.reason===item.reason);if(item.status==='approved'&&baseline&&this.approvals.latestId(repo.id,job.issue,item.reason)===baseline.requestId)item.status='stale';}
   return result;
  }
@@ -186,7 +186,7 @@ export class GitHubReviews {
     if(!same(fresh.bindings,scope.bindings))throw new Error('review_scope_changed');
     const statuses=await this.statuses(repo,job,fresh,request);
     if(request.reevaluation)for(const item of statuses)if(item.reason==='specification')item.status='reevaluating';
-    const ready=statuses.every(item=>['approved','automatic_retry_pending','reevaluating'].includes(item.status));
+    const ready=statuses.every(item=>['approved','automatic','automatic_retry_pending','reevaluating'].includes(item.status));
     if(!same(statuses,request.statuses)||request.worker!==(ready?'resuming':'waiting')){request=structuredClone(request);request.statuses=statuses;request.worker=ready?'resuming':'waiting';await this.publish(repo,request);}
    }
    for(const stored of this.state.requests.filter(item=>item.repositoryId===repo.id&&!jobs.some(job=>job.issue===item.issue))){
@@ -208,7 +208,7 @@ export class GitHubReviews {
   for(const repo of value.repositories){const configured=this.registry.repositories.find(item=>item.id===repo.id)!;for(const job of [...(repo.current?[repo.current]:[]),...(repo.humanWaiting??[]).map(item=>item.job)]){
    const request=this.state.requests.find(item=>item.repositoryId===repo.id&&item.issue===job.issue);if(!request)continue;
    try{const scope=await this.approvals.scope(configured,job.issue);
-    const statuses=await this.statuses(configured,job,scope,request);job.githubReviewReady=request.published&&same(request.reevaluation?.issue??request.bindings.issue,scope.bindings.issue)&&same(request.bindings.diff,scope.bindings.diff)&&statuses.every(item=>item.status==='approved'||item.status==='automatic_retry_pending'||item.reason==='specification'&&request.reevaluation&&scope.current.processedSpecificationDigest!==request.reevaluation.issue.issueDigest);
+    const statuses=await this.statuses(configured,job,scope,request);job.githubReviewReady=request.published&&same(request.reevaluation?.issue??request.bindings.issue,scope.bindings.issue)&&same(request.bindings.diff,scope.bindings.diff)&&statuses.every(item=>item.status==='approved'||item.status==='automatic'||item.status==='automatic_retry_pending'||item.reason==='specification'&&request.reevaluation&&scope.current.processedSpecificationDigest!==request.reevaluation.issue.issueDigest);
     if(request.reevaluation)job.reevaluationReady=same(request.reevaluation.issue,scope.bindings.issue)&&same(request.reevaluation.diff,scope.bindings.diff??null)&&scope.current.processedSpecificationDigest!==request.reevaluation.issue.issueDigest;}catch{job.githubReviewReady=false;job.reevaluationReady=false;}
   }}return value;
  }

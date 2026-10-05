@@ -26,3 +26,6 @@ export type Reevaluation = {requestId:string;issue:IssueBinding;previousIssueDig
 export function parseReevaluation(value:unknown):Reevaluation;
 
 export function parseReviewBinding(value:unknown):{issue:IssueBinding;diff:DiffBinding|null};
+export const automaticReviewReasons:readonly string[];
+export function automaticReviewEligible(reasons:unknown):boolean;
+export function automaticReason(policy:unknown,profile:unknown,reason:string):boolean;

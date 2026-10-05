@@ -37,7 +37,7 @@ export async function runTrustedWorker(repo:Repository,issue:number,profile:Work
     child.once('error',()=>reject(new Error('worker_completion_unknown')));
     // Successful IPC alone is insufficient; wait for process and stdio closure.
     child.once('close',(code,signal)=>{if(code===0 && !signal && outcome && !invalid)resolve(outcome);else reject(new Error('worker_completion_unknown'));});
-    child.send({version:1,profile,repo:repo.repo,clonePath:repo.clonePath,stateDirectory:repo.stateDirectory,expectedIssue:issue,...(recovery?{recovery}:{}),...(reevaluation?{reevaluation}:{}),...(reviewBinding?{reviewBinding}:{}),...(grants.length?{approval:{repositoryId:repo.id,repo:repo.repo,grants}}:{})},error=>{if(error)reject(new Error('worker_completion_unknown'));});
+    child.send({version:1,profile,repo:repo.repo,clonePath:repo.clonePath,stateDirectory:repo.stateDirectory,expectedIssue:issue,...(repo.reviewPolicy==='local-automatic'?{reviewPolicy:repo.reviewPolicy}:{}),...(recovery?{recovery}:{}),...(reevaluation?{reevaluation}:{}),...(reviewBinding?{reviewBinding}:{}),...(grants.length?{approval:{repositoryId:repo.id,repo:repo.repo,grants}}:{})},error=>{if(error)reject(new Error('worker_completion_unknown'));});
   });
 }
 interface Reservation {version:1;status:'reserved'|'settled';repositoryId:string;issue:number;reservationId:string;outcome:DispatchOutcome|null}
