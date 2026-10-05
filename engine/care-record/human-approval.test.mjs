@@ -232,3 +232,15 @@ test('automatic policy remains disabled for manager protected paths, unknown pol
  assert.equal(automaticReason('local-automatic','local-ai-manage-v1','security'),false);assert.equal(automaticReason('manual','care-record-v1','security'),false);
  const f=await fixture(t);await f.change('src/app/auth/page.tsx');await assert.rejects(verify(f.current,f.execute,'care-record-v1',f.approval,null,'bypass'));
 });
+
+test('canonical-only specification change reevaluates current GitHub content in the same saved session; replay is rejected',async t=>{
+ const {canonicalSpec}=await import('./lib/canonical-spec.mjs');const {createHash}=await import('node:crypto');const f=await fixture(t,59,true);await f.change('example.txt','implemented\n');f.current.humanReasons=['specification'];
+ const content='Owner canonical decision',sha=createHash('sha1').update(`blob ${Buffer.byteLength(content)}\0`).update(content).digest('hex');
+ const read=async path=>path==='commits?per_page=1'?[{sha:'c'.repeat(40),commit:{tree:{sha:'a'.repeat(40)}}}]:path==='git/trees/'+'a'.repeat(40)?{sha:'a'.repeat(40),truncated:false,tree:[{path:'docs',type:'tree',mode:'040000',sha:'b'.repeat(40)}]}:path==='git/trees/'+'b'.repeat(40)?{sha:'b'.repeat(40),truncated:false,tree:[{path:'system-decisions.md',type:'blob',mode:'100644',sha}]}:{sha,encoding:'base64',size:Buffer.byteLength(content),content:Buffer.from(content).toString('base64')};
+ const canonical=(await canonicalSpec(['docs/system-decisions.md'],read)).binding;const issue=issueBinding(f.issue),diff=await diffBinding(f.current,f.execute);const reevaluation={requestId:'12345678-1234-4234-8234-123456789abc',previousIssueDigest:issue.issueDigest,issue,diff,canonical,previousCanonicalDigest:'d'.repeat(64)};
+ const execute=async(binary,args,options)=>binary==='gh'&&args[0]==='api'&&/\/(?:commits\?|git\/)/.test(args.at(-1))?JSON.stringify(await read(args.at(-1).slice('repos/test/repo/'.length))):f.execute(binary,args,options);
+ await f.save();let ran=0;const state=await f.run({approval:undefined,reevaluation,reviewBinding:{issue,diff,canonical},execute,run:async({current,canonicalFiles})=>{ran++;assert.equal(current.session,'saved-session');assert.equal(canonicalFiles[0].content,content);return {code:0,result:{...result,status:'needs_human',safe_to_open_pr:false,reasons:[{category:'specification',check:'none'}]}};}});
+ assert.equal(ran,1);assert.equal(state.status,'needs-human');assert.equal(state.current.processedSpecificationRequestId,reevaluation.requestId);
+ await f.run({approval:undefined,reevaluation,reviewBinding:{issue,diff,canonical},execute,run:()=>assert.fail('canonical revision replayed')});
+ assert.ok(!f.calls.some(([binary,args])=>binary==='git'&&args[0]==='push'));
+});

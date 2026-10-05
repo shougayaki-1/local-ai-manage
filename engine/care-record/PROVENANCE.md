@@ -18,3 +18,5 @@ e2e/run-local.mjsとe2e/local-environment.mjsはユーザー所有CareRecordのs
 
 2026-10-05、Issue #8: manager が生成・保存した current review request の stable actor ID、Issue/diff binding を検証し、#5 private grants へ変換。新しい strict IPC は request Issue/diff binding と仕様本文更新後の一回限り再評価のみで、generic specification grant は追加しない。controller lock/revision、finite checks/repair、production/credential/sandbox/publication guards を維持。新 manager module github-review.ts も protected path に追加。
 2026-10-05、Issue #7 制約解消: 元の未commit local-automatic 実装から信頼済み opt-in policy と使い捨て DB/E2E runner の必要部分を確認して移植。元worktree は無変更。並列実行・credential probe・deployment gate解除・追加repair/timeout増加は移植せず、既定manual/#5・manager protected path・固定検証境界を維持。
+
+2026-10-05、Issue #8 制約解消: 信頼済みregistryの固定Markdown canonical sourceをGitHubのimmutable tree/blobへ束縛。取得/モード/hash/UTF-8/boundsを検証、本文不変でも新しいsource digestと新reactionで一回だけ再評価。#5 grantは拡張せず、private capabilityとworkerの独立再取得でstaleを拒否。

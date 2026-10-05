@@ -1,4 +1,5 @@
 export interface Repository {
+  canonicalSpecs?:string[];
   reviewPolicy?:'manual'|'local-automatic';
   id: string;
   repo: string;

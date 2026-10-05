@@ -121,8 +121,9 @@ test('trusted opt-in #59 policy projects human categories automatic separately f
  const f=await fixture(t,59);await f.prepare();const registry:Registry={...f.registry,repositories:[{...f.repo,reviewPolicy:'local-automatic'}]};
  await writeFile(join(f.controller.directoryPath(),'handoff.json'),JSON.stringify({version:1,registryFingerprint:registryFingerprint(registry),standaloneStopped:true,scope:'all-registered-workers',repositories:[{repositoryId:f.repo.id,profile:'care-record-v1'}]}),{mode:0o600});
  f.current.humanReasons=['db','auth','permission','tenant','manual_e2e','security','retention','local_verification','sandbox_capability'];f.current.result={reasons:[{category:'local_verification',check:'test:ui'},{category:'sandbox_capability',check:'test:ui'}]};await f.save();
- const approvals=await Approvals.create(registry,f.controller,{read:async()=>f.issue});let job=(await approvals.project(await collectSnapshot(registry))).repositories[0]!.current!;
+ const read=async(_repo:string,resource:string)=>resource.includes('pulls?')||resource.includes('/timeline?')?[]:f.issue;
+ const approvals=await Approvals.create(registry,f.controller,{read});let job=(await approvals.project(await collectSnapshot(registry))).repositories[0]!.current!;
  assert.equal(job.recovery,'automatic_retry_pending');assert.equal(job.approvals!.length,7);assert.ok(job.approvals!.every(item=>item.status==='automatic'&&!item.approvable));assert.equal(approvals.grants().length,0);
- const restored=await Approvals.create(registry,f.controller,{read:async()=>f.issue});job=(await restored.project(await collectSnapshot(registry))).repositories[0]!.current!;assert.ok(job.approvals!.every(item=>item.status==='automatic'));
+ const restored=await Approvals.create(registry,f.controller,{read});job=(await restored.project(await collectSnapshot(registry))).repositories[0]!.current!;assert.ok(job.approvals!.every(item=>item.status==='automatic'));
  assert.notEqual(registryFingerprint(registry),registryFingerprint(f.registry));assert.equal(registryFingerprint({...f.registry,repositories:[{...f.repo,reviewPolicy:'manual'}]}),registryFingerprint(f.registry));
 });

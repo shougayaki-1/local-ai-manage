@@ -1,3 +1,4 @@
+import {parseCanonicalBinding} from './canonical-spec.mjs';
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { open, realpath } from 'node:fs/promises';
@@ -165,17 +166,18 @@ export function parseRecovery(value) {
 }
 
 export function parseReevaluation(value) {
-  if (!exact(value, ['requestId','issue','previousIssueDigest','diff']) || typeof value.requestId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value.requestId) || !hash(value.previousIssueDigest)) throw new Error('invalid_reevaluation');
+  if (!exact(value, ['requestId','issue','previousIssueDigest','diff',...(Object.hasOwn(value??{},'canonical')?['canonical','previousCanonicalDigest']:[])]) || typeof value.requestId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value.requestId) || !hash(value.previousIssueDigest)) throw new Error('invalid_reevaluation');
   const issue=parseBinding(value.issue), diff=value.diff===null?null:parseBinding(value.diff);
-  if(issue.kind!=='issue'||issue.issueDigest===value.previousIssueDigest||diff&&diff.kind!=='diff')throw new Error('invalid_reevaluation');
+  if(issue.kind!=='issue'||issue.issueDigest===value.previousIssueDigest&&!value.canonical||diff&&diff.kind!=='diff')throw new Error('invalid_reevaluation');
+  if(value.canonical){const binding=parseCanonicalBinding(value.canonical);if(!hash(value.previousCanonicalDigest)||binding.digest===value.previousCanonicalDigest)throw new Error('invalid_reevaluation');}
   return {...value,issue,diff};
 }
 
 export function parseReviewBinding(value) {
-  if (!exact(value,['issue','diff'])) throw new Error('invalid_review_binding');
+  if (!exact(value,['issue','diff',...(Object.hasOwn(value??{},'canonical')?['canonical']:[])])) throw new Error('invalid_review_binding');
   const issue=parseBinding(value.issue),diff=value.diff===null?null:parseBinding(value.diff);
   if(issue.kind!=='issue'||diff&&diff.kind!=='diff')throw new Error('invalid_review_binding');
-  return {issue,diff};
+  return {issue,diff,...(value.canonical?{canonical:parseCanonicalBinding(value.canonical)}:{})};
 }
 // Trusted opt-in policy; never selected from Issue text or worker output.
 export const automaticReviewReasons=Object.freeze([...approvableReasons]);

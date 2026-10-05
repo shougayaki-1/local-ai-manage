@@ -1,3 +1,4 @@
+import {canonicalSpec} from './lib/canonical-spec.mjs';
 import { readSuppressedDeployment, branchSuppressionOnly, PublicationSafetyError } from './lib/publication.mjs';
 import { assertProfileId, assertManagerCheck, ProfileBindingError } from './profiles.mjs';
 import { automaticReason, e2eSpecs, e2eProjects, operationalReasons, recoveryState, parseReviewBinding, parseReevaluation, parseRecovery, parseGrant, pendingReasons, changedFiles, protectedReasons, issueBinding, diffBinding, requireApprovals, HumanApprovalError } from './lib/human-approval.mjs';
@@ -244,6 +245,9 @@ export async function worker({ config, mode = 'normal', resume = false, expected
     if (resume && !state.current) { state.paused = false; await persist(); }
     let canResumeSession;
     let recoveryValidated = false;
+    let canonicalFiles=[];
+    const canonicalBinding=reviewBinding?.canonical??reevaluation?.canonical;
+    const assertCanonical=async()=>{if(!canonicalBinding)return;const actual=await canonicalSpec(canonicalBinding.paths,resource=>github.api(resource));if(JSON.stringify(actual.binding)!==JSON.stringify(canonicalBinding))throw new WorktreeSafetyError('verification_issue_changed');canonicalFiles=actual.files;};
     let reevaluationValidated = false;
     let reviewValidated = false;
     await execute('gh', ['auth', 'status'], { purpose: 'github' });
@@ -270,6 +274,7 @@ export async function worker({ config, mode = 'normal', resume = false, expected
       const current = state.current;
       if (resolve(current.worktree) !== join(config.stateDir, 'worktrees', `issue-${current.number}`)) throw new Error('Unexpected worktree path in state');
       const issue = await github.issue(current.number);
+      await assertCanonical();
       if (reviewBinding && !reviewValidated) {
         if (JSON.stringify(reviewBinding.issue) !== JSON.stringify(issueBinding(issue)) || JSON.stringify(reviewBinding.diff) !== JSON.stringify(current.base ? await diffBinding(current, execute) : null)) {
           state.paused=true;state.status='needs-human';state.lastReason='human_approval_required';current.approvalStatus='stale';await persist();await github.mark(current.number,'needs_human');return state;
@@ -285,7 +290,7 @@ export async function worker({ config, mode = 'normal', resume = false, expected
         if (!selectIssue([eligible], snapshot.dependencies, snapshot.linked)) return state;
         const reasons = [...new Set([...pendingReasons(current), ...(current.base ? await protectedReasons(current, execute, profile) : [])])];
         if (!reasons.length) return state;
-        if (reevaluation && !reevaluationValidated && (!reasons.includes('specification') || current.processedSpecificationDigest === reevaluation.issue.issueDigest || JSON.stringify(reevaluation.issue) !== JSON.stringify(issueBinding(issue)) || JSON.stringify(reevaluation.diff) !== JSON.stringify(current.base ? await diffBinding(current, execute) : null))) return state;
+        if (reevaluation && !reevaluationValidated && (!reasons.includes('specification') || (current.processedSpecificationRequestId===reevaluation.requestId||!reevaluation.canonical&&current.processedSpecificationDigest===reevaluation.issue.issueDigest) || JSON.stringify(reevaluation.issue) !== JSON.stringify(issueBinding(issue)) || JSON.stringify(reevaluation.diff) !== JSON.stringify(current.base ? await diffBinding(current, execute) : null))) return state;
         if (recovery && !recoveryValidated && (recoveryState(current) !== 'automatic_retry_pending' || JSON.stringify(recovery.issue) !== JSON.stringify(issueBinding(issue)) || JSON.stringify(recovery.diff) !== JSON.stringify(await diffBinding(current, execute)))) return state;
         if (!recovery && !recoveryValidated && reasons.some(reason => operationalReasons.includes(reason))) return state;
         const bindings = { issue: issueBinding(issue), diff: current.base ? await diffBinding(current, execute) : undefined };
@@ -336,6 +341,7 @@ export async function worker({ config, mode = 'normal', resume = false, expected
       if (recovery && !recoveryValidated) { current.stage = 'publish'; recoveryValidated = true; }
       if (reevaluation && !reevaluationValidated) {
         current.processedSpecificationDigest = reevaluation.issue.issueDigest;
+        current.processedSpecificationRequestId=reevaluation.requestId;
         current.humanReasons = (current.humanReasons ?? []).filter(reason => reason !== 'specification');
         if (current.preflight?.category === 'specification') delete current.preflight;
         if (current.stage === 'publish') current.stage = 'implement';
@@ -364,7 +370,7 @@ export async function worker({ config, mode = 'normal', resume = false, expected
         if (!canResumeSession && expectedIssue !== undefined && current.session) throw new WorktreeSafetyError('repair_session_resume_unavailable');
         if (!canResumeSession) current.session = null;
         await persist();
-        const outcome = await run({ current, issue, profile, reviewPolicy, schemaPath: join(config.stateDir, 'result.schema.json'), tracePath: join(runDir, 'trace.jsonl'), stderrPath: join(runDir, 'stderr.log'), signal, maxRunMs: config.maxRunMs,
+        const outcome = await run({ current, issue, profile, reviewPolicy, canonicalFiles, schemaPath: join(config.stateDir, 'result.schema.json'), tracePath: join(runDir, 'trace.jsonl'), stderrPath: join(runDir, 'stderr.log'), signal, maxRunMs: config.maxRunMs,
           onLaunch: () => telemetry?.launched(),
           onSession: async session => {
             if (current.repair && current.session && current.session !== session) throw new WorktreeSafetyError('repair_session_mismatch');
@@ -414,6 +420,7 @@ export async function worker({ config, mode = 'normal', resume = false, expected
         await persist();
       }
       let verified;
+      await assertCanonical();
       try { verified = await verify(current, execute, profile, approval ?? {repositoryId:'',repo,grants:[],issue:()=>github.issue(current.number)}, automatic ? issueBinding(issue) : reevaluationValidated ? reevaluation.issue : recoveryValidated ? recovery.issue : reviewValidated ? reviewBinding.issue : null, reviewPolicy); }
       catch (error) {
         if (signal?.aborted) throw error;
@@ -439,6 +446,7 @@ export async function worker({ config, mode = 'normal', resume = false, expected
         return state;
       }
       try {
+        await assertCanonical();
         if(verified.automaticBinding){const fresh=await github.issue(current.number);if(fresh.state!=='open'||labels(fresh).some(name=>['codex:blocked','codex:failed','codex:needs-human'].includes(name))||JSON.stringify(verified.automaticBinding)!==JSON.stringify(await diffBinding(current,execute)))throw new WorktreeSafetyError('verification_issue_changed');}
         if (verified.recoveryBinding) {
           const fresh = await github.issue(current.number);

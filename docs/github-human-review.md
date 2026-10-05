@@ -31,11 +31,13 @@ comment の安全な表示は category/status、固定 check、Worker waiting/re
 
 ## specification と operational blockers
 
-specification は grant 対象ではない。owner が **Issue 本文**に canonical decision を記録し、その変更後に current request に 👍 を付けると、Issue digest/revision 時刻の変化と saved diff の一致を確認して一度だけ再評価する。古い 👍、本文変更のない 👍 はトリガーにしない。GitHub の秒単位時刻で順序が不明な場合も受理せず、本文更新より後の秒の reaction を要求する。canonical spec ファイルの変更検出は本版では自動読取せず、決定を Issue 本文に記録する。自由文コメントは仕様の正本にしない。
+specification は grant 対象ではない。owner が **Issue 本文または登録済み canonical spec**に decision を記録し、その変更後に current request に 👍 を付けると、Issue digest/revision 時刻または canonical blob digest の変化と saved diff の一致を確認して一度だけ再評価する。古い 👍、本文も canonical spec も変わらない 👍 はトリガーにしない。canonical spec更新では同じcommentを新requestへ更新し、公開前のreactionをbaselineとして拒否する。GitHub の秒単位時刻で順序が不明な場合も受理せず、本文更新より後の秒の reaction を要求する。信頼済み registry の `canonicalSpecs: ["docs/system-decisions.md"]` で登録した Markdown は、GitHub default branch の immutable Git tree/blob から取得して変更を検出する。最大8文書・各64KiB・合計256KiB、通常file modeとSHA-1、UTF-8を検証し、symlink・truncated tree・未登録path・取得不明は拒否する。Issue/コメント/reaction からpathを設定できない。設定はhandoff fingerprintに束縛する。自由文コメントは仕様の正本にしない。
 
 仕様と human approvable blocker が共存するときは、仕様再評価トリガーを保存し、更新後の Issue に束縛した current request を同じ comment へ表示する。その新しい request の確認済み範囲へ改めて 👍 を付けるまで human grant を作らず、再開しない。仕様更新の反応を他カテゴリの承認へ転用しない。
 
-worker は同じ saved session/worktree/base を保ち、再評価した Issue digest を private state に保存して replay を拒否する。仕様確認を approval 扱いせず、Codex が再び specification を返せば停止し、同じ comment を次の decision request に更新する。他の human guard、有限 verification repair、必須 checks は維持する。
+worker は登録したcanonical内容をprivate promptへ渡して同じ saved session/worktree/base を保ち、再評価した Issue digest/request ID を private state に保存して replay を拒否する。canonical内容はdispatch・検証前・publication前にも独立再取得し、digestが変われば停止する。本文・raw blob・absolute pathはreview state/commentへ保存・表示しない。仕様確認を approval 扱いせず、Codex が再び specification を返せば停止し、同じ comment を次の decision request に更新する。他の human guard、有限 verification repair、必須 checks は維持する。
+
+信頼済み registry の local-automatic は #7 の全固定検証・使い捨てDB/E2E契約に従い、GitHubにもhuman categoriesをautomaticと表示する。manager profileのsecurity・specification・禁止カテゴリは自動対象にしない。
 
 local_verification / sandbox_capability / verification_retry_limit は #7 の固定 parent verification に従い、👍 を要求しない。automatic retry または failed / human investigation を表示する。production/deploy/credential/destructive/auto-merge の権限は追加しない。実装により sandbox/network 制約を変更しない。
 
