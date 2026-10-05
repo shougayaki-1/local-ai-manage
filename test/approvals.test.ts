@@ -26,7 +26,7 @@ async function fixture(t:test.TestContext,number=48){
  const saved={version:1,repo:repo.repo,status:'needs-human',paused:true,current,quotaWaitStarted:null,nextRetryAt:null,lastReason:'manual_e2e_required'};
  const save=()=>writeFile(join(state,'state.json'),JSON.stringify(saved),{mode:0o600});await save();
  const issue={number,state:'open',labels:[{name:'codex:needs-human'}],body:'## Acceptance Criteria\nMust run E2E.\n'};
- const read=async(_repo:string,resource:string)=>resource===`issues/${number}`?issue:{number:Number(resource.split('/')[1]),state:'closed'};
+ const read=async(_repo:string,resource:string)=>resource.includes('pulls?')||resource.includes('/timeline?')?[]:resource===`issues/${number}`?issue:{number:Number(resource.split('/')[1]),state:'closed'};
  let approvals=await Approvals.create(registry,controller,{read});
  const request=(reason='manual_e2e'):ApprovalRequest=>({requestId:randomUUID(),expectedRevision:approvals.revision(),repositoryId:repo.id,issue:number,reason,e2e:reason==='manual_e2e'?{specs:['auth'],projects:['chromium','mobile-chrome']}:null});
  const restart=async()=>{await controller.close();controller=await Controller.create(registry,join(root,'controller'));approvals=await Approvals.create(registry,controller,{read});return approvals;};
@@ -106,4 +106,24 @@ test('HTTP approval uses existing authentication/Origin/CSRF and exposes only a 
  assert.equal((await fetch(server.origin+'/api/controls',{method:'POST',headers,body:JSON.stringify({requestId:command.requestId,expectedRevision:0,target:'global',action:'resume'})})).status,409);
  assert.deepEqual(await (await fetch(server.origin+'/api/requests/'+command.requestId,{headers:{Cookie:cookie}})).json(),ack);
  const snapshot=await (await fetch(server.origin+'/api/status',{headers:{Cookie:cookie}})).text();assert.ok(snapshot.includes('approved'));for(const value of [f.repo.stateDirectory,f.issue.body,'diffDigest','issueDigest','session'])assert.ok(!snapshot.includes(value));
+});
+
+test('operational blockers never project Approval missing or accept grants; fixed recovery is separate',async t=>{
+ const f=await fixture(t,59);await f.prepare();await writeFile(join(f.worktree,'file.txt'),'implemented\n');
+ f.current.result={reasons:[{category:'local_verification',check:'test:ui'},{category:'sandbox_capability',check:'test:ui'}]};await f.save();
+ let job=(await f.approvals.project(await collectSnapshot(f.registry))).repositories[0]!.current!;
+ assert.deepEqual(job.approvals,[]);assert.equal(job.recovery,'automatic_retry_pending');
+ for(const reason of ['local_verification','sandbox_capability','verification_retry_limit'])await assert.rejects(async()=>f.approvals.apply(f.request(reason)));
+ f.current.recoveryStatus='investigation';await f.save();job=(await f.approvals.project(await collectSnapshot(f.registry))).repositories[0]!.current!;assert.equal(job.recovery,'human_investigation_required');
+});
+
+test('trusted opt-in #59 policy projects human categories automatic separately from operational recovery and survives restart',async t=>{
+ const f=await fixture(t,59);await f.prepare();const registry:Registry={...f.registry,repositories:[{...f.repo,reviewPolicy:'local-automatic'}]};
+ await writeFile(join(f.controller.directoryPath(),'handoff.json'),JSON.stringify({version:1,registryFingerprint:registryFingerprint(registry),standaloneStopped:true,scope:'all-registered-workers',repositories:[{repositoryId:f.repo.id,profile:'care-record-v1'}]}),{mode:0o600});
+ f.current.humanReasons=['db','auth','permission','tenant','manual_e2e','security','retention','local_verification','sandbox_capability'];f.current.result={reasons:[{category:'local_verification',check:'test:ui'},{category:'sandbox_capability',check:'test:ui'}]};await f.save();
+ const read=async(_repo:string,resource:string)=>resource.includes('pulls?')||resource.includes('/timeline?')?[]:f.issue;
+ const approvals=await Approvals.create(registry,f.controller,{read});let job=(await approvals.project(await collectSnapshot(registry))).repositories[0]!.current!;
+ assert.equal(job.recovery,'automatic_retry_pending');assert.equal(job.approvals!.length,7);assert.ok(job.approvals!.every(item=>item.status==='automatic'&&!item.approvable));assert.equal(approvals.grants().length,0);
+ const restored=await Approvals.create(registry,f.controller,{read});job=(await restored.project(await collectSnapshot(registry))).repositories[0]!.current!;assert.ok(job.approvals!.every(item=>item.status==='automatic'));
+ assert.notEqual(registryFingerprint(registry),registryFingerprint(f.registry));assert.equal(registryFingerprint({...f.registry,repositories:[{...f.repo,reviewPolicy:'manual'}]}),registryFingerprint(f.registry));
 });

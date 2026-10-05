@@ -8,7 +8,7 @@
 
 - CareRecordとlocal-ai-manageの専用clone/stateを `registry.live.local.json` に登録。registryはGit対象外・0600。
 - 全体Resumed、両repo Enabled / Resumed。最終GUI確認はrevision 5、idle、Current jobs / Needs human / Quota wait各0。Ready候補なし。
-- 同時実行は全体1件。repo間round-robin、repo内priorityとIssue番号順。既定GPT-6.1 Sol / medium。
+- 同時実行は全体2件・各repo1件。repo間round-robin、repo内priorityとIssue番号順。既定GPT-6.1 Sol / medium。
 - 準備済みの通常Issueに既存worker規約に沿うmetadataと `codex:ready` を設定すると、候補を再検証して固定profileで実行する。関連PR、依存関係、unknown/partial stateはworkerが再検証する。
 - GUIを閉じてもworker管理は継続する。Pause dispatchは新規開始を止め、実行中処理の完了を待つ。repo Pause / Disableも同様。Resumeは保存済みneeds-humanやquotaを解除しない。
 - Draft PRを人がレビューする。業務PRの自動mergeは行わない。Issueの保存session/baseと実行履歴を消して再試行しない。
@@ -41,7 +41,7 @@ idle時はcontrollerの15秒heartbeatを明示的にmanaged-controllerとして�
 - 運用workflowのCareRecord PR #77 / #78 / #79は内容・CIを確認して手動merge。業務Draft PR #75 / #3はmergeしていない。
 - 本番credentialのコピー、local E2E、DB/migration適用は実施していない。CareRecordのPRに設定されたGitHub CIはその既存検証を実行した。通常のmain pushによる既存GitHub/Vercel integrationは停止・変更していない。
 
-対応profileはcare-record-v1とlocal-ai-manage-v1。Tauri、任意repo profile、model override、並列実行は将来範囲であり、今回の2repo運用には不要。新しいrepoはorigin/path重複・exact scripts・固定profile・移管確認を整えて登録する。
+対応profileはcare-record-v1とlocal-ai-manage-v1。Tauri、任意repo profile、model overrideは将来範囲。並列実行は全体上限内で各repo1件に対応。新しいrepoはorigin/path重複・exact scripts・固定profile・移管確認を整えて登録する。
 
 ## スマホ・外出先からの管理（2026-10-04追加）
 
@@ -66,3 +66,51 @@ status serviceの `--mention-user shougayaki-1` によりcurrentまたはhumanWa
 認証済みの実APIでapprovalRevision 0とcurrent/humanWaitingのカテゴリ別missing表示を確認した。不明repositoryを含む承認requestは400で拒否。人間承認は作成していない。CareRecord current #58 / humanWaiting #39, #47, #48, #57, #59、およびlocal-ai-manage current #5のstate.jsonはbackupとのSHA-256比較で完全一致した。repo Enabled/Resumedを維持し、保守Pauseだけを解除して全体Resumed、controller revision 7、scheduler idleへ復帰した。通常heartbeatと2つのLaunchAgentの新PIDを確認した。
 
 管理アプリ113件・worker130件（合計243件）の回帰、typecheck / lint / build / diff-check成功。E2E・DB適用・needs-human解除・業務PR mergeは行っていない。承認手順・scope・stale・再開契約は [人間承認の手順](human-approvals.md) を参照。管理画面を再読み込みすると承認操作が表示される。default branchへのmergeは行わず、Pushしたbranchのビルドを既存LaunchAgentが使用する。
+
+
+## 並列実行と停止原因の解消（2026-10-04）
+
+全体上限2・各repository1件へ変更し、controller/statusをprivate backup後に通常停止・再build・再起動した。scheduler version 2は旧単一予約のschemaを引き継いで読み、全予約を保持する。repository別dispatch journal、短いadmission lane、共有quota、全jobのdrain、承認時の対象repository lock、offline recoveryの全lane fingerprintを検証した。詳細は [並列実行と停止原因](parallel-execution.md)。
+
+CareRecord #74の停止は、saved baseと同じvercel.jsonに実行branchのfalse項目がないことが原因だった。managed parentによるbranch限定抑止の準備を追加し、既存session/worktreeで親検証から [Draft PR #83](https://github.com/shougayaki-1/care-record/pull/83) まで完了した。業務PRはmergeしていない。
+
+#39はcredential分離・合成test環境でtypecheck/lint/unit/UI/buildが成功、protected diffの検出なし。saved baseとmainの差は #80の通知workflow/scriptの2fileだけだった。初回の復旧操作はautomatic approval reviewで拒否されたが、ユーザーの明示承認後、元state/baseをbackup、fast-forward前後の実装diffDigest一致とsession保全を確認して親検証へ戻し、GitHub labelをreadyへ変更した。独立した親unit検証で失敗したため、保存sessionによる有限self-repairへ進んだ。
+
+#45はopenの#39、#60〜#63はopenの#59への依存で待機。DB/RLSや認証差分、実行必須E2Eのscope承認が必要な #47/#48/#57/#59は未解除。Ready labelが再付与されてもhumanWaitingを確認待ちとして表示する。
+
+回帰はアプリ120件・worker134件（合計254件）成功、typecheck/lint/build/diff-check成功。アプリ全fileのfixture同時実行で既存producerのタイミングテストが不安定になったため、最終の全アプリ回帰はtest-concurrency=1で確認した。producer単体の全回帰も成功。実際のworker重複は追加の並列テストで確認済み。実serviceのglobalConcurrency 2とactiveJobsを認証APIで確認した。両repoに実候補が同時にはなかったため、実Codex2件の同時起動は未試験。
+
+
+#47/#57のローカルtypecheck/lint/unit/UI/buildはすべて成功した。#59のUIにはPopover transition完了前のvisibility assertion失敗があったため、StorybookのwaitForで条件成立を待つ最小修正を保存worktreeのstoryだけに適用し、UI全件成功を確認した。固定sleep/timeout増加・DB/RLS変更・state/label変更はしていない。protected diffは #47=db/security/permission、#57=auth、#59=auth/db/security/permissionであり、カテゴリ承認を保持する。
+
+#39の再試行はCLIのquota errorで一度止まった。minute-onlyの回復時刻を同じ分の13秒後に読むと翌日へ繰り越すバグを修正し、現在分は1分後、明確な過去時刻は翌日、明示timestampはそのままとする回帰を追加した。最新account observationはordinaryUsageAllowed=true、primary usedPercent=3だった。ユーザーの「再開して」に基づき、記録が誤翌日化のパターンと完全一致し実行lock/予約がないことを確認、private backup/receiptを保存してworker・scheduler・settled dispatchの既知retry時刻だけを1分後へ訂正、controllerを通常再起動した。quotaWaits/session/失敗履歴は保持し、reset券は使っていない。全体と両repoのResume/Enableを維持する。
+
+親検証は、scope承認を通過したhumanカテゴリをローカルscript委譲の検査へ再投入しないよう修正した。auth理由をresultにも含む実際の形で、承認から親検証・mock publicationまでの回帰を確認した。public build assetのsandbox download制限は親build検証へ委譲するpromptを明確化し、実credential/production/external serviceの境界を維持した。
+
+再試行時刻の訂正後、#39 は同じsessionで実resumeした。未変更のunitテストで15件のtimeoutが発生してneeds-humanとなったが、独立した標準 `npm run test:unit` は設定変更なしで成功した。親検証が追加した当該branch限定のVercel deploymentEnabled=false項目により、元の承認diffDigestとは相違する。実装だけのdigest照合を条件に再検証へ戻す案はautomatic approval reviewで未承認の追加差分として拒否されたため、追加scopeの明示承認待ちに留める。全体の保守Pauseは解除する。
+
+## ローカルDB/E2Eの自動検証へ切替（2026-10-05）
+
+ユーザーが「必要なローカルDB/E2E検証も自動で行う」を選択したため、CareRecordのregistryにlocal-automatic方針を追加する。コード差分のカテゴリ承認をPRレビューへ移し、E2E必須Issueの実装前停止を解消。固定親runnerは新規Supabase project・空きport・seedなしでmigrationを適用し、DBテスト・存在するisolation spec・public型比較・固定全specのdesktop/mobile E2Eをretry 0で検証する。成功前のpush/Draft作成、production・実credential・既存DB利用・mergeは許可しない。
+
+実#47の使い捨てDB起動・migration適用は成功したが、DBテストで失敗した。一時stackはcleanup済みで、その試験だけではPR作成していない。固定phase/test識別子だけを同じsessionの有限repairへ渡す。旧credential/external_service labelも、固定unit/buildのcredential分離試験が成功した場合に限り検証項目を解消する。承認履歴を偽造・一括追加しない。
+
+回帰は管理アプリ123件・worker144件（合計267件）、typecheck/lint/build/diff-check成功。mock local runnerでDB失敗・skip・中断cleanup・実credential非継承を確認。保存jobの自動選択、実credential/production禁止、同じgit statusでの内容改変拒否も検証した。詳細は [自動ローカル検証方針](human-approvals.md#ローカル検証の自動化2026-10-05)。
+
+
+反映中の通常停止では旧controller lockが残った。LaunchAgent全登録解除、controller/bridge/standalone processなし、open lockなし、全worker lockなし、予約idle/空、全worker stateのbackup一致を確認し、既存offline recoveryで旧directoryをretireして `~/.local/state/local-ai-manage-live-auto-local` へrotationした。旧lock・control receiptsは旧directoryに保存し、既知quotaを引継ぎ、dashboard signing keyと固定status targetを維持した。registry/handoff/quota/status fingerprintを新方針へ同期、既存LaunchAgents・Managed/Mobile launcherのcontroller-stateも新directoryへ変更した。
+
+shutdownはschedulerの新規実行を停止してからGitHub observerをabortし、その後drainを待つ順序へ修正した。実controllerでSIGTERM後の自力lock解放とkickstart成功を確認。新しいrevision系で全体・両repoをResumeする。自動検証へ進めるだけのcode-review待ちは人への通知を抑止し、本当の検証失敗は既存通知schemaへ固定projectionして残す。#39の個別復旧は未承認の追加差分についての以前のreview拒否と実検証停止を保持し、一括で解除していない。
+
+最終確認: 新controller revision 3で全体・両repo Enabled/Resumed、全体上限2。#47を保存jobから自動選択しlegacy local probeへ投入したが、成功条件を満たさずautomatic_verification_failedとして保留した。その他の自動対象は独立に再選択する。これは人間承認を足せば成功扱いになる状態ではなく、実検証／環境の失敗を保持するもの。旧controllerの未完了予約を消して再実行したわけではない。
+
+
+## 復旧経路の統合（2026-10-05）
+
+Issue #7/#8 の運用復旧・GitHub確認経路を、現在稼働中の全体2件・repoごと1件のschedulerへ統合した。管理対象profileは、このrepositoryに実在するAGENTS.mdとREADME.md、docs/profiles.md、docs/human-approvals.md、docs/github-human-review.md、docs/parallel-execution.mdを参照する。CareRecord固有のCLAUDE.md/system-decisions.mdを管理アプリのcheckoutへ要求しない。
+
+保存されたcurrentが調査待ちでも、個別に承認・復旧条件を満たしたhumanWaitingの作業はfresh Issue・依存・関連PRを確認して選択できる。退避時には元のsession/base/worktree/failure/alternative履歴を保持する。実検証失敗・retry exhaustionは自動再開対象に戻さない。local-automaticの親検証は、全固定DB/isolation/type/E2E検証を必須とする。旧unit/build理由の変換は実credentialを継承しない独立probeの成功時だけに限定する。
+
+shutdownは受付停止、observer abort、実行中jobとGitHub書込みのdrainの順。registryの同時実行数、保存quota、repoのEnable/Resume、handoffは維持する。先行PRの「稼働並列経路を取り込んでいない」という記録は、そのPR単独時点の検証範囲である。
+
+統合後の管理アプリ・worker全回帰、typecheck、lint、build、diff-checkを実施する。CareRecord #59の保存worktreeでは標準Storybook UI 68件が成功した。独立baselineの使い捨てDBではmigration、SQL、isolation、生成型照合が成功した。E2E復旧シナリオの画面遷移競合はCareRecord側の検証課題として扱い、管理側の検証要件を緩和しない。

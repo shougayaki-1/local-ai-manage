@@ -854,3 +854,149 @@ test('invalid or duplicate parked work is rejected on restart',async t=>{
   await saveJson(join(path,'state.json'),{...emptyState(),humanWaiting});await assert.rejects(loadState(path),/Invalid worker state/);
  }
 });
+
+
+test('minute-only CLI quota reset in the current minute retries shortly rather than tomorrow',()=>{
+ const now=new Date(2026,9,4,23,30,13).getTime();
+ assert.equal(quotaResetAt('Usage limit. Try again at 11:30 PM.',now),now+60000);
+ assert.equal(quotaResetAt('Usage limit. Try again at 11:29 PM.',now),new Date(2026,9,5,23,29).getTime());
+ assert.equal(quotaResetAt('Usage limit. Try again at 11:31 PM.',now),new Date(2026,9,4,23,31).getTime());
+ assert.equal(quotaResetAt({error:{resets_at:new Date(now+3600000).toISOString()}},now),now+3600000);
+});
+
+for (const succeeds of [true, false]) test(`automatic alternative implementation is bounded and ${succeeds ? 'publishes only after verification' : 'retains failed work'}`, async t => {
+  const f = await repairFixture(t);
+  const { CommandFailure } = await import('./lib/failure.mjs');
+  let turns = 0, checks = 0;
+  const state = await worker({ ...f.options, expectedIssue: 40, reviewPolicy: 'local-automatic', continueAfterHuman: true,
+    execute: async (b, a, o) => {
+      if (b === 'git' && a[0] === 'show' && a[1]?.endsWith(':vercel.json')) return JSON.stringify({ git: { deploymentEnabled: false } });
+      if (b === 'git' && a[0] === 'rev-list' && a.includes('--count') && a.at(-1).endsWith('..HEAD')) return '1';
+      if (b === 'git' && (a[0] === 'merge-base' || a[0] === 'rev-parse' && !a.includes('--git-common-dir'))) return 'a'.repeat(40);
+      if (b === 'git' && a[0] === 'diff' && a.includes('-z')) return 'A\0scripts/example.mjs\0';
+      if (b === 'git' && a[0] === 'worktree' && a[1] === 'add') {
+        const value = await f.execute(b, a, o);
+        await mkdir(join(a[4], 'scripts/e2e'),{recursive:true});
+        await writeFile(join(a[4], 'playwright.config.ts'),await readFile(new URL('./e2e/playwright.config.ts.reference',import.meta.url)));
+        await writeFile(join(a[4], 'scripts/e2e/local-environment.mjs'),await readFile(new URL('./e2e/local-environment.mjs',import.meta.url)));
+        await writeFile(join(a[4], 'package.json'),JSON.stringify({scripts:{...localScripts,dev:'next dev --webpack'}}));
+        await writeFile(join(a[4], 'scripts/example.mjs'), 'export const example = true;');
+        return value;
+      }
+      if (b === 'npm' && a[1] === 'typecheck') {
+        checks++;
+        if (!succeeds || checks < 4) throw new CommandFailure({ assertion: true });
+      }
+      if (b === 'git' && ['push','commit'].includes(a[0])) assert.equal(checks, 4);
+      return f.execute(b, a, o);
+    }, run: async ({ current, onSession }) => {
+      turns++;
+      if (turns === 1) await onSession('alternative-session');
+      else assert.equal(current.session, 'alternative-session');
+      if (turns >= 3) {
+        assert.equal(current.alternativeHistory.length, turns - 2);
+        assert.equal(current.base, 'a'.repeat(40));
+        assert.equal(current.failures, turns - 1);
+      }
+      return { code: 0, result: { ...result, reasons: [] } };
+    } });
+  assert.equal(turns, 4, JSON.stringify({ reason: state.lastReason, humanReasons: state.current?.humanReasons, checks }));
+  assert.equal(checks, 4);
+  assert.equal(state.lastReason, succeeds ? 'completed' : 'automatic_verification_failed');
+  if (!succeeds) {
+    assert.equal(state.current.alternativeHistory.length, 2);
+    assert.equal((await loadState(f.stateDir)).current.session, 'alternative-session');
+    assert.ok(!f.calls.some(([b,a]) => b === 'git' && ['push','commit'].includes(a[0])));
+  }
+});
+
+test('alternative planning excludes unsafe, operational and DB environment failures', async () => {
+  const { planAlternative, VerificationFailure, CommandFailure } = await import('./lib/failure.mjs');
+  for (const failure of [new Error('operational'), new CommandFailure({ unsafe: true }), new CommandFailure({ capability: true }), new CommandFailure({ localPhase: 'start' }), new CommandFailure({ localPhase: 'migrations' })]) {
+    const current = { failures: 1, stage: 'publish' };
+    assert.equal(planAlternative(current, new VerificationFailure('local_db_e2e', failure)), false);
+    assert.deepEqual(current, { failures: 1, stage: 'publish' });
+  }
+});
+
+test('alternative prompt preserves acceptance criteria and required verification', async () => {
+  const { implementationPrompt } = await import('./lib/codex-runner.mjs');
+  const diagnostic = { category: 'local_verification', check: 'test:ui', diagnostic: 'assertion_failed' };
+  const prompt = implementationPrompt(issue(40), { number: 40, repair: diagnostic, alternativeHistory: [diagnostic] }, 'care-record-v1', 'local-automatic');
+  assert.match(prompt, /Alternative implementation attempt 1\/2/);
+  assert.match(prompt, /materially different implementation/);
+  assert.match(prompt, /preserve every acceptance criterion/);
+  assert.match(prompt, /never claim unrun verification passed/);
+  assert.match(prompt, /Do not remove required behavior/);
+});
+
+test('alternative history survives quota without consuming another attempt', async t => {
+  const f = await repairFixture(t);
+  const { CommandFailure } = await import('./lib/failure.mjs');
+  let turns = 0, checks = 0, time = 1000;
+  const options = { ...f.options, expectedIssue: 40, reviewPolicy: 'local-automatic', continueAfterHuman: true, now: () => time,
+    execute: async (b, a, o) => {
+      if (b === 'git' && a[0] === 'show' && a[1]?.endsWith(':vercel.json')) return JSON.stringify({ git: { deploymentEnabled: false } });
+      if (b === 'git' && a[0] === 'rev-list' && a.includes('--count') && a.at(-1).endsWith('..HEAD')) return '1';
+      if (b === 'git' && (a[0] === 'merge-base' || a[0] === 'rev-parse' && !a.includes('--git-common-dir'))) return 'a'.repeat(40);
+      if (b === 'git' && a[0] === 'diff' && a.includes('-z')) return 'A\0scripts/example.mjs\0';
+      if (b === 'git' && a[0] === 'worktree' && a[1] === 'add') {
+        const value = await f.execute(b,a,o);
+        await mkdir(join(a[4], 'scripts/e2e'),{recursive:true});
+        await writeFile(join(a[4], 'playwright.config.ts'),await readFile(new URL('./e2e/playwright.config.ts.reference',import.meta.url)));
+        await writeFile(join(a[4], 'scripts/e2e/local-environment.mjs'),await readFile(new URL('./e2e/local-environment.mjs',import.meta.url)));
+        await writeFile(join(a[4], 'package.json'),JSON.stringify({scripts:{...localScripts,dev:'next dev --webpack'}}));
+        await writeFile(join(a[4], 'scripts/example.mjs'), 'export const example = true;');
+        return value;
+      }
+      if (b === 'npm' && a[1] === 'typecheck' && ++checks <= 2) throw new CommandFailure({ type: true });
+      return f.execute(b,a,o);
+    } };
+  const first = await worker({ ...options, run: async ({ onSession }) => {
+    turns++; if (turns === 1) await onSession('alternative-quota-session');
+    return turns === 3 ? { quota: 'window', code: 1 } : { code: 0, result: { ...result, reasons: [] } };
+  } });
+  assert.equal(first.lastReason, 'quota_wait', JSON.stringify({ turns, checks, humanReasons: first.current?.humanReasons }));
+  assert.equal(first.current.alternativeHistory.length, 1);
+  assert.equal(first.current.failures, 2);
+  const invalid = structuredClone(first);
+  invalid.current.alternativeHistory = Array(3).fill(first.current.repair);
+  await saveJson(join(f.stateDir, 'state.json'), invalid);
+  await assert.rejects(loadState(f.stateDir), /Invalid worker state/);
+  await saveJson(join(f.stateDir, 'state.json'), first);
+  time = first.nextRetryAt;
+  const second = await worker({ ...options, run: async ({ current }) => {
+    assert.equal(current.session, 'alternative-quota-session');
+    assert.equal(current.alternativeHistory.length, 1);
+    assert.equal(current.failures, 2);
+    return { code: 0, result: { ...result, reasons: [] } };
+  } });
+  assert.equal(second.lastReason, 'completed');
+});
+
+for (const labels of [['codex:running'], ['codex:blocked'], ['codex:needs-human']]) {
+  test(`managed saved repair uses ordinary session resume and respects intervention: ${labels.join(',')}`, async t => {
+    const f = await repairFixture(t);
+    const current = { number: 40, branch: 'codex/issue-40-task-40', worktree: join(f.stateDir, 'worktrees/issue-40'),
+      base: 'base-sha', session: 'saved-repair-session', stage: 'implement', failures: 1, quotaWaits: 0,
+      repair: { category: 'local_verification', check: 'test:unit', diagnostic: 'check_failed' },
+      result: { ...result, reasons: [{ category: 'db', check: 'none' }, { category: 'sandbox_capability', check: 'test:ui' }] } };
+    await mkdir(current.worktree, { recursive: true });
+    await saveJson(join(f.stateDir, 'state.json'), { ...emptyState(), repo: 'test/repo', status: 'running', paused: false,
+      lastReason: 'parent_verification_retry', current });
+    const execute = mockExecute([issue(40, labels)], f.calls);
+    let runs = 0;
+    const state = await worker({ ...f.options, expectedIssue: 40, reviewPolicy: 'local-automatic', continueAfterHuman: true,
+      execute, run: async ({ current: restored }) => {
+        runs++;
+        for (const key of ['session', 'worktree', 'branch', 'base', 'failures']) assert.equal(restored[key], current[key]);
+        assert.deepEqual(restored.repair, current.repair);
+        return { quota: 'window', code: 1 };
+      } });
+    const allowed = labels[0] === 'codex:running';
+    assert.equal(runs, allowed ? 1 : 0);
+    assert.equal(state.status, allowed ? 'quota-wait' : 'needs-human');
+    assert.equal(state.current.session, current.session);
+    assert.ok(!f.calls.some(([b,a]) => b === 'git' && ['push','commit','reset','clean','stash','rebase'].includes(a[0])));
+  });
+}

@@ -53,7 +53,7 @@ export async function command(binary, args, { cwd, input, purpose = 'build', tim
       let tail = '';
       const inspect = chunk => {
         const text = tail + chunk;
-        for (const [name, value] of Object.entries(failureSignals(text))) if (value) signals[name] = true;
+        for (const [name, value] of Object.entries(failureSignals(text))) if (value) signals[name] = value;
         tail = text.slice(-256); // Transient only; never attached to errors/logs.
       };
       let escalation;

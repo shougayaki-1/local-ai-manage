@@ -3,7 +3,7 @@
 Mac上のCodex Continuous Workerを複数repositoryで管理するlocal dashboard。
 
 このMacの運用移管・実行検証は完了しています。起動・停止・遠隔statusの最新手順は [運用手順](docs/live-operation.md) を参照してください。
-初期状態ではworkerに対して **observe-only** です。controllerのdispatch設定はGUIから保存できます。明示的な移管設定と `--execute` を揃えた場合だけ、schedulerが固定workerを1件ずつ実行します。通常のlauncherは観測のみです。`--github`でGitHub queueの読み取りを接続できます。
+初期状態ではworkerに対して **observe-only** です。controllerのdispatch設定はGUIから保存できます。明示的な移管設定と `--execute` を揃えた場合だけ、schedulerが設定した全体上限内で固定workerを実行します（各repositoryは1件）。通常のlauncherは観測のみです。`--github`でGitHub queueの読み取りを接続できます。
 
 ## 起動
 
@@ -33,7 +33,7 @@ npm start -- --registry registry.local.json --github --status
 
 複数repositoryは配列に追加できます。origin一致、canonical path、同じGit common directoryや入れ子stateの重複を検証します。各cloneとstate directoryは既存である必要があります。stateがない/不正/別repoならUnavailableとなり、作成・修復はしません。
 
-`enabled`はcontroller設定の初期値です。GUIのEnable/Disableはcontroller専用領域に保存され、registryそのものは変更しません。`enabled`だけでは実行せず、移管確認と `--execute` も必要です。registryのownershipはobserve-onlyのみ、global/repository concurrencyは1のみです。CareRecord stateは移動せず旧pathを指定してください。
+`enabled`はcontroller設定の初期値です。GUIのEnable/Disableはcontroller専用領域に保存され、registryそのものは変更しません。`enabled`だけでは実行せず、移管確認と `--execute` も必要です。registryのownershipはobserve-onlyのみ、globalConcurrencyは1〜32、repositoryのmaximumConcurrencyは1です。CareRecord stateは移動せず旧pathを指定してください。
 
 ## Controller設定
 
@@ -99,7 +99,7 @@ git diff --check
 - care-record-v1とlocal-ai-manage-v1を実装。package名・exact scripts・保護対象をprofileごとに照合し、GPT-6.1 Sol / mediumを固定。詳細は[profile一覧](docs/profiles.md)。Issue metadataによるmodel/effort overrideは未実装です。
 - 内部 `dispatchOnce` はcanonical registry、private ledger directory、登録repo id、正のexpectedIssue、明示的handoff attestationを要求。registryのenabledもtrueである必要があります。観測用registryはfalseのまま、別のlive registryでは登録2repoをtrueにしています。
 - handoffの `standaloneStopped: true / scope: all-registered-workers` は、管理者が登録全repoのstandalone worker・Codex子processが終了し、再起動しない状態へ移管したことの申告です。lock不在から自動推測しません。GUIからこの申告を作るAPIはありません。このMacでは登録2repoの停止確認と移管を実施済みです。
-- 全体exclusive `dispatch.lock` と、実行前にsync保存する `dispatch.json` reservation。異常終了・不正IPC・生存worker.lock・保存結果不明ならlock/reservationを保持して再実行を止めます。人による確認に基づくoffline rotation/replayはdocs/recovery.mdを参照してください。
+- 全体1件ではexclusive `dispatch.lock` と `dispatch.json`、並列設定ではrepositoryごとの `dispatch.<id>.lock/json` と短い全体admission lockを使います。実行前にreservationをsync保存します。異常終了・不正IPC・生存worker.lock・保存結果不明ならlock/reservationを保持して再実行を止めます。人による確認に基づくoffline rotation/replayはdocs/recovery.mdを参照してください。
 - quota待機は前回adapter結果と全登録worker stateから検査。future nextRetryAt、期限不明のquota待機では他repoも起動しません。schedulerもshared quota gateと期限を永続化し、repository間をround-robinで選びます。
 - expectedIssueとsaved currentが違えばworkerを進めません。saved needs-human/failed/pausedも解除せず、session/base/failures/quotaWaitsを維持します。session resume非対応時は保存sessionを捨てず人の確認へ止めます。
 - 新規claimでは最新queue候補、fresh Issue、再取得した依存/関連PRを確認。候補変更や未確認なら実行しません。GitHub上のclaimは原子的ではないため、exclusive ownershipが必須です。
@@ -189,8 +189,15 @@ MacとスマホでTailscaleに接続し、Macの管理画面の「スマホ用�
 
 ## このMacの管理設定（2026-10-04）
 
-デスクトップの「Local AI Manage.command」、または [Managed-Launch.command](Managed-Launch.command) を開いてください。起動済みserviceへ認証して管理画面を開きます。privateな `registry.live.local.json` を使い、CareRecordとlocal-ai-manageがEnabled / Resumed、全体もResumedで実行候補を待っています。同時実行は全体1件、既定はGPT-6.1 Sol / mediumです。
+デスクトップの「Local AI Manage.command」、または [Managed-Launch.command](Managed-Launch.command) を開いてください。起動済みserviceへ認証して管理画面を開きます。privateな `registry.live.local.json` を使い、CareRecordとlocal-ai-manageがEnabled / Resumed、全体もResumedで実行候補を待っています。同時実行は全体2件・各repository1件、既定はGPT-6.1 Sol / mediumです。
 
 controllerとstatusはログイン時にLaunchAgentで起動します。旧CareRecord standalone agentは無効化・登録解除済みです。元state、Issue履歴、session/worktreeと移管前backupは保持しています。GUIを閉じてもserviceは継続します。停止する場合はGUIのPause dispatchで新規実行を止め、実行中jobの完了を待ちます。
 
 実workerでCareRecord [Draft PR #75](https://github.com/shougayaki-1/care-record/pull/75)、local-ai-manage [Draft PR #3](https://github.com/shougayaki-1/local-ai-manage/pull/3) を作成しました。業務変更のmergeは人がレビューします。遠隔statusは両repoの専用固定コメントをActionsが更新・監視しています。詳しい操作と検証証跡は [運用手順](docs/live-operation.md) を参照してください。
+
+並列実行・部分キューの扱いと確認待ちの復旧は [並列実行と停止原因](docs/parallel-execution.md) を参照してください。
+
+DB・認証等のコード差分も先に進める運用では、repositoryごとの `reviewPolicy: "local-automatic"` を指定できる。必要なDB/E2Eを使い捨てローカル環境で自動検証し、成功後にDraft PRへ進む。既定はmanual。詳細は [検証と承認方針](docs/human-approvals.md#ローカル検証の自動化2026-10-05)。
+## GitHub Issue を日常の確認窓口にする
+
+managed controller を `--execute --github` で使用すると、保存 needs-human の Issue に固定 review/status comment を作成・更新する。owner/登録 stable reviewer ID の current request への 👍 を private approval grant に変換し、最後の条件が揃えば追加 Resume なしで保存 session/worktree を再開する。specification は本文決定更新後の再評価のみ、operational blocker は固定 parent verification で処理する。管理画面は補助UIとして保持する。初期 reviewer/E2E scope、stale、API失敗時の安全契約は [GitHub Issue の承認操作](docs/github-human-review.md) を参照。

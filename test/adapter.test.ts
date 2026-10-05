@@ -64,3 +64,19 @@ test('real fixed bridge returns paused state through IPC without touching worker
   await assert.rejects(readFile(join(f.root,'worker/worker.lock')),{code:'ENOENT'});
  } finally {process.env.PATH=previousPath;}
 });
+
+test('parallel adapter reserves independent lanes, rejects duplicate/orphan work and preserves quota',async t=>{
+ const f=await fixture(t);for(const name of ['clone-b','worker-b'])await mkdir(join(f.root,name),{mode:0o700});
+ const second={...f.registry.repositories[0]!,id:'test--second',repo:'test/second',clonePath:join(f.root,'clone-b'),stateDirectory:join(f.root,'worker-b')};
+ const registry={...f.registry,globalConcurrency:2,repositories:[...f.registry.repositories,second]};let finish!:(value:DispatchOutcome)=>void;let began!:()=>void;const started=new Promise<void>(resolve=>{began=resolve;});
+ const a=dispatchOnce({...f,registry,run:async()=>{await writeFile(join(f.root,'worker/worker.lock'),'managed');began();return new Promise(resolve=>{finish=resolve;});}});
+ await started;
+ const bOptions={...f,registry,repositoryId:second.id,handoff:{...f.handoff,repositoryId:second.id},managedActiveRepositoryIds:[f.repositoryId]};
+ await assert.rejects(dispatchOnce({...bOptions,managedActiveRepositoryIds:[],run:async()=>assert.fail('orphan admitted')}),/reconciliation_required/);
+ await assert.rejects(dispatchOnce({...f,registry,managedActiveRepositoryIds:[f.repositoryId],run:async()=>assert.fail('duplicate admitted')}),/reconciliation_required/);
+ await dispatchOnce({...bOptions,run:async()=>{assert.equal(JSON.parse(await readFile(join(f.directory,`dispatch.${f.repositoryId}.json`),'utf8')).status,'reserved');return {...result,status:'quota-wait',nextRetryAt:Date.now()+60000};}});
+ await rm(join(f.root,'worker/worker.lock'));finish(result);await a;
+ assert.equal(JSON.parse(await readFile(join(f.directory,`dispatch.${second.id}.json`),'utf8')).outcome.status,'quota-wait');
+ await assert.rejects(dispatchOnce({...f,registry,run:async()=>assert.fail('quota ignored')}),/shared_quota_wait/);
+ await assert.rejects(dispatchOnce({...f,registry:{...registry,globalConcurrency:1},run:async()=>assert.fail('quota ignored after reducing limit')}),/shared_quota_wait/);
+});

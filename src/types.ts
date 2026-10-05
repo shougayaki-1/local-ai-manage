@@ -1,4 +1,5 @@
 export interface Repository {
+  canonicalSpecs?:string[];
   id: string;
   repo: string;
   clonePath: string;
@@ -7,21 +8,27 @@ export interface Repository {
   ownership: 'observe-only';
   defaultModel: 'gpt-6.1-sol';
   defaultEffort: 'low' | 'medium' | 'high' | 'xhigh';
+  githubReview?: {reviewerIds:number[];e2e:{specs:string[];projects:string[]}|null};
   maximumConcurrency: 1;
+  reviewPolicy?: 'manual' | 'local-automatic';
 }
-export interface Registry { version: 1; globalConcurrency: 1; repositories: Repository[] }
+export interface Registry { version: 1; globalConcurrency: number; repositories: Repository[] }
 export interface Job {
+  localProbeEligible?:boolean;
   issue: number; stage: 'prepare'|'implement'|'publish'|'unknown';
   failures: number | null; quotaWaits: number | null;
   model: string | null; effort: string | null;
   reasonCategories: string[]; check: string | null; prUrl: string | null;
-  approvals?: {reason:string;status:'missing'|'approved'|'stale';approvable:boolean}[];
+  githubReviewReady?: boolean;
+  reevaluationReady?: boolean;
+  recovery?: 'automatic_retry_pending'|'human_investigation_required';
+  approvals?: {reason:string;status:'missing'|'approved'|'stale'|'automatic';approvable:boolean}[];
 }
 export interface RepoSnapshot {
   id: string; repo: string; enabled: boolean; ownership: 'observe-only'|'managed';
   status: string; paused: boolean | null; current: Job | null;
   humanWaiting?: {job:Job;reason:string;since:string}[];
-  defaultModel: string; defaultEffort: string;
+  defaultModel: string; defaultEffort: string; reviewPolicy?:'manual'|'local-automatic';
   quota: { status: 'waiting'|'unknown'; nextRetryAt: string | null; startedAt: string | null };
   stateUpdatedAt: string | null; heartbeat: {at:string;status:'updating'|'stale'|'stopped';source?:'managed-controller'} | null;
   logs: {status:'observed'|'stale'|'unavailable';events:{at:string;type:'state'|'worker.started'|'worker.stopped'|'codex.started';issue:number|null;stage:string|null;status:string}[]};
@@ -65,7 +72,7 @@ export interface ControlAck {
   application?:{status:'applied'|'draining'|'blocked'|'not-managed'|'superseded';reason:SchedulerReason};
 }
 export interface ControllerView {
-  status:'observing'|'paused'|'running'|'draining'|'idle'|'blocked'; globalConcurrency:1; execution:'not-managed'|'managed';
+  status:'observing'|'paused'|'running'|'draining'|'idle'|'blocked'; globalConcurrency:number; execution:'not-managed'|'managed';
   scheduler?:SchedulerView;
   revision?:number; paused?:boolean; controls?:'dispatch-intent';
   repositories?:{id:string;enabled:boolean;paused:boolean}[];
@@ -74,6 +81,6 @@ export interface ControllerView {
 export type SchedulerReason = 'observe_only'|'paused'|'disabled'|'running'|'draining'|'idle'|'shared_quota_wait'|'worker_state_unavailable'|'queue_unverified'|'needs_human'|'dispatch_unavailable'|'reconciliation_required'|'storage_uncertain'|'stopping'|'superseded';
 export interface SchedulerView {
   status:'idle'|'running'|'draining'|'paused'|'blocked';reason:SchedulerReason;
-  active:{repositoryId:string;issue:number}|null;managedRepositoryIds:string[];
+  active:{repositoryId:string;issue:number}|null;activeJobs?:{repositoryId:string;issue:number}[];managedRepositoryIds:string[];
   nextRetryAt:string|null;
 }

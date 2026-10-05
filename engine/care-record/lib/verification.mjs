@@ -45,7 +45,7 @@ export function verificationTests(changed, scripts, reasons = []) {
   if (changed.some(line => /\s+scripts\/ci\//.test(line))) checks.push('test:ci-scope');
   if (changed.some(line => /\s+(?:src\/|next\.config\.|package(?:-lock)?\.json$)/.test(line)) && scripts.build) checks.push('build');
   for (const reason of reasons) {
-    if (reason.category !== 'sandbox_capability' || !localChecks.includes(reason.check)) throw new Error('Unsafe handoff reason');
+    if (!['sandbox_capability', 'local_verification', 'verification_retry_limit'].includes(reason.category) || !localChecks.includes(reason.check)) throw new Error('Unsafe handoff reason');
     if (!['typecheck', 'lint', 'diff-check'].includes(reason.check)) checks.push(reason.check);
   }
   return [...new Set(checks)];

@@ -72,3 +72,9 @@ test('storage failure stops subsequent writes; inconsistent saved preferences ar
  const raw=JSON.parse(await readFile(join(another,'controller.json'),'utf8'));raw.paused=false;
  await writeFile(join(another,'controller.json'),JSON.stringify(raw));await assert.rejects(Controller.create(registry,another),/controller_state_invalid/);
 });
+
+test('saved human waiting overrides a ready label in the queue projection without mutating observation',async t=>{
+ const root=await fixture(t);const controller=await Controller.create({...registry,globalConcurrency:2},join(root,'controller'));t.after(async()=>{await controller.close();await rm(root,{recursive:true,force:true});});
+ const snapshot=demoSnapshot();const job=snapshot.repositories[0]!.current!;snapshot.repositories[0]!.humanWaiting=[{job:{...job,issue:73},reason:'needs_human',since:new Date(0).toISOString()}];
+ const before=JSON.stringify(snapshot);assert.equal(controller.project(snapshot).queue.items[0]!.status,'needs-human');assert.equal(controller.view().globalConcurrency,2);assert.equal(JSON.stringify(snapshot),before);
+});

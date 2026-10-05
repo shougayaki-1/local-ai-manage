@@ -21,7 +21,7 @@ service="gui/$(id -u)/local.local-ai-manage.controller"
 if /bin/launchctl print "$service" >/dev/null 2>&1; then
   /bin/launchctl kickstart "$service"
   for attempt in {1..10}; do
-    if node dist/server/cli.js --open-existing --controller-state "$HOME/.local/state/local-ai-manage-live" 2>/dev/null; then
+    if node dist/server/cli.js --open-existing --controller-state "$HOME/.local/state/local-ai-manage-live-auto-local" 2>/dev/null; then
       print '管理画面をブラウザで開きました。管理サービスはバックグラウンドで稼働を続けます。'
       print 'このTerminalウィンドウは閉じて構いません。'
       exit 0
@@ -32,4 +32,4 @@ if /bin/launchctl print "$service" >/dev/null 2>&1; then
   if [[ -t 0 ]]; then read '?Enterで閉じる' || true; fi
   exit 1
 fi
-node dist/server/cli.js --registry registry.live.local.json --controller-state "$HOME/.local/state/local-ai-manage-live" --github --execute --tailscale auto --open
+node dist/server/cli.js --registry registry.live.local.json --controller-state "$HOME/.local/state/local-ai-manage-live-auto-local" --github --execute --tailscale auto --open

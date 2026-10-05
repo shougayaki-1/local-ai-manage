@@ -26,7 +26,7 @@ Macとスマホで[Tailscale](https://tailscale.com/download)をインストー�
 ```sh
 npm start -- --registry registry.local.json --tailscale auto --port 42731
 # 稼働中managed serviceのスマホ用リンクを取得する
-npm start -- --mobile-link --controller-state /Users/shoug/.local/state/local-ai-manage-live
+npm start -- --mobile-link --controller-state /Users/shoug/.local/state/local-ai-manage-live-auto-local
 ```
 
 `--tailscale <100.x.x.x>` は割り当て済みTailscale IPv4アドレスへの明示bind。`--lan <192.168.x.x>` は同じWi-Fi用の明示bindで、Tailscaleとは併用不可。LAN HTTPはVPNで暗号化されないため、外出先用にはTailscaleを使う。既定はloopbackのみ。

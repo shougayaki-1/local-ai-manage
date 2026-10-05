@@ -1,6 +1,11 @@
+import { readReviewBinding, readReevaluation } from './github-review.ts';
+import type { Reevaluation } from './approval-policy.ts';
 import { isWorkerProfile, type WorkerProfile } from './profiles.ts';
 import { assertRecoveryClear } from './recovery-guard.ts';
 import { readApprovalGrants } from './approvals.ts';
+import { diffBinding, issueBinding, recoveryState, parseReviewBinding, parseRecovery } from './approval-policy.ts';
+import { approvalGit } from './approvals.ts';
+import { ghRead } from './github-queue.ts';
 import type { Grant } from './approval-policy.ts';
 import { fork } from 'node:child_process';
 import { constants } from 'node:fs';
@@ -23,7 +28,7 @@ export function bridgeEnvironment(env:NodeJS.ProcessEnv=process.env):NodeJS.Proc
   const names=['PATH','USER','LOGNAME','SHELL','LANG','LC_ALL','HOME','CODEX_HOME','TMPDIR','GH_TOKEN','GITHUB_TOKEN','GH_CONFIG_DIR','SSH_AUTH_SOCK','DBUS_SESSION_BUS_ADDRESS','XDG_RUNTIME_DIR'];
   return Object.fromEntries(names.filter(name=>typeof env[name]==='string').map(name=>[name,env[name]]));
 }
-export async function runTrustedWorker(repo:Repository,issue:number,profile:WorkerProfile='care-record-v1',grants:Grant[]=[]):Promise<DispatchOutcome> {
+export async function runTrustedWorker(repo:Repository,issue:number,profile:WorkerProfile='care-record-v1',grants:Grant[]=[],recovery?:ReturnType<typeof parseRecovery>,reevaluation?:Reevaluation,reviewBinding?:ReturnType<typeof parseReviewBinding>):Promise<DispatchOutcome> {
   if(!isWorkerProfile(profile))throw new Error('unsupported_profile');
   return new Promise((resolve,reject)=>{
     const child=fork(new URL(import.meta.url.endsWith('.ts')?'../engine/care-record/bridge.mjs':'../../engine/care-record/bridge.mjs',import.meta.url),[],{cwd:repo.clonePath,detached:process.platform!=='win32',execArgv:[],env:bridgeEnvironment(),stdio:['ignore','ignore','ignore','ipc']});
@@ -32,38 +37,51 @@ export async function runTrustedWorker(repo:Repository,issue:number,profile:Work
     child.once('error',()=>reject(new Error('worker_completion_unknown')));
     // Successful IPC alone is insufficient; wait for process and stdio closure.
     child.once('close',(code,signal)=>{if(code===0 && !signal && outcome && !invalid)resolve(outcome);else reject(new Error('worker_completion_unknown'));});
-    child.send({version:1,profile,repo:repo.repo,clonePath:repo.clonePath,stateDirectory:repo.stateDirectory,expectedIssue:issue,...(grants.length?{approval:{repositoryId:repo.id,repo:repo.repo,grants}}:{})},error=>{if(error)reject(new Error('worker_completion_unknown'));});
+    child.send({version:1,profile,repo:repo.repo,clonePath:repo.clonePath,stateDirectory:repo.stateDirectory,expectedIssue:issue,...(repo.reviewPolicy==='local-automatic'?{reviewPolicy:repo.reviewPolicy}:{}),...(recovery?{recovery}:{}),...(reevaluation?{reevaluation}:{}),...(reviewBinding?{reviewBinding}:{}),...(grants.length?{approval:{repositoryId:repo.id,repo:repo.repo,grants}}:{})},error=>{if(error)reject(new Error('worker_completion_unknown'));});
   });
 }
 interface Reservation {version:1;status:'reserved'|'settled';repositoryId:string;issue:number;reservationId:string;outcome:DispatchOutcome|null}
-async function persist(directory:string,value:Reservation) {
+async function persist(directory:string,value:Reservation,journal='dispatch.json') {
   const temporary=join(directory,randomUUID()+'.tmp');const file=await open(temporary,constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600);
   try{await file.writeFile(JSON.stringify(value));await file.sync();}finally{await file.close();}
-  try{await rename(temporary,join(directory,'dispatch.json'));const handle=await open(directory,constants.O_RDONLY);try{await handle.sync();}finally{await handle.close();}}
+  try{await rename(temporary,join(directory,journal));const handle=await open(directory,constants.O_RDONLY);try{await handle.sync();}finally{await handle.close();}}
   finally{await unlink(temporary).catch(()=>{});}
 }
 /** Internal controller boundary, deliberately absent from HTTP/launcher. Handoff is
  * a trusted administrator attestation, never inferred from an absent worker.lock. */
-export async function dispatchOnce({registry,directory,handoff,repositoryId,expectedIssue,now=Date.now,run}:{registry:Registry;directory:string;handoff:Handoff;repositoryId:string;expectedIssue:number;now?:()=>number;run?:(repo:Repository,issue:number)=>Promise<DispatchOutcome>}):Promise<DispatchOutcome> {
+interface DispatchOptions {registry:Registry;directory:string;handoff:Handoff;repositoryId:string;expectedIssue:number;now?:()=>number;run?:(repo:Repository,issue:number)=>Promise<DispatchOutcome>;managedActiveRepositoryIds?:string[]}
+export async function dispatchOnce(options:DispatchOptions):Promise<DispatchOutcome> {
+ if(options.registry.globalConcurrency>1)return dispatchParallel(options);
+ try{await lstat(join(options.directory,'dispatch-admission.lock'));throw new Error('dispatch_reconciliation_required');}catch(error){if(!(error instanceof Error)||!('code' in error)||error.code!=='ENOENT')throw error;}
+ // A reduction in concurrency never hides reservations made by the parallel adapter.
+ for(const repo of options.registry.repositories){
+  try{await lstat(join(options.directory,`dispatch.${repo.id}.lock`));throw new Error('dispatch_reconciliation_required');}
+  catch(error){if(!(error instanceof Error)||!('code' in error)||error.code!=='ENOENT')throw error;}
+  try{const prior=(await readPrivateJson(join(options.directory,`dispatch.${repo.id}.json`))).value;if(!record(prior)||prior.status!=='settled')throw new Error('dispatch_reconciliation_required');const result=parseOutcome(prior.outcome,prior.issue as number);if(result.status==='quota-wait'&&(result.nextRetryAt===null||(options.now??Date.now)()<result.nextRetryAt))throw new Error('shared_quota_wait');}
+  catch(error){if(!(error instanceof Error)||!('code' in error)||error.code!=='ENOENT')throw error;}
+ }
+ return dispatchInLane(options);
+}
+async function dispatchInLane({registry,directory,handoff,repositoryId,expectedIssue,now=Date.now,run}:DispatchOptions,journal='dispatch.json',lockName='dispatch.lock',active:string[]=[]):Promise<DispatchOutcome> {
   const repo=registry.repositories.find(item=>item.id===repositoryId);
   if(!repo || !repo.enabled || !record(handoff) || Object.keys(handoff).length!==4 || handoff.scope!=='all-registered-workers' || handoff.repositoryId!==repo.id || !isWorkerProfile(handoff.profile) || handoff.standaloneStopped!==true || !Number.isSafeInteger(expectedIssue) || expectedIssue<=0 || repo.defaultModel!=='gpt-6.1-sol' || repo.defaultEffort!=='medium')throw new Error('dispatch_not_authorized');
   const info=await lstat(directory);const root=await realpath(directory);
   if(!info.isDirectory() || info.isSymbolicLink() || info.uid!==process.getuid?.() || (info.mode&0o077)!==0 || registry.repositories.flatMap(item=>[item.clonePath,item.stateDirectory]).some(path=>root===path || root.startsWith(path+sep) || path.startsWith(root+sep)))throw new Error('dispatch_directory_unsafe');
   await assertRecoveryClear(root);
-  const lock=await open(join(root,'dispatch.lock'),constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600);
+  const lock=await open(join(root,lockName),constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600);
   let reserved=false;
   try {
     await assertRecoveryClear(root);
     await lock.writeFile(JSON.stringify({version:1,reservationId:randomUUID()}));await lock.sync();
     try {
-      const prior=(await readPrivateJson(join(root,'dispatch.json'))).value;
+      const prior=(await readPrivateJson(join(root,journal))).value;
       if(!record(prior) || Object.keys(prior).length!==6 || prior.version!==1 || prior.status!=='settled' || typeof prior.repositoryId!=='string' || !registry.repositories.some(item=>item.id===prior.repositoryId) || !Number.isSafeInteger(prior.issue) || typeof prior.reservationId!=='string'){reserved=true;throw new Error('dispatch_reconciliation_required');}
       const previous=parseOutcome(prior.outcome,prior.issue as number);
       if(previous.status==='quota-wait' && (previous.nextRetryAt===null || now()<previous.nextRetryAt))throw new Error('shared_quota_wait');
     } catch(error) {if(!(error instanceof Error) || !('code' in error) || error.code!=='ENOENT')throw error;}
     // Any legacy lock, including another observed repository, blocks global execution.
     for(const registered of registry.repositories) {
-      try{await lstat(join(registered.stateDirectory,'worker.lock'));throw new Error('standalone_worker_lock');}
+      try{await lstat(join(registered.stateDirectory,'worker.lock'));if(active.includes(registered.id))continue;throw new Error('standalone_worker_lock');}
       catch(error){if(!(error instanceof Error) || !('code' in error) || error.code!=='ENOENT')throw error;}
     }
     for(const registered of registry.repositories) {
@@ -73,17 +91,78 @@ export async function dispatchOnce({registry,directory,handoff,repositoryId,expe
       }catch(error){if(!(error instanceof Error) || !('code' in error) || error.code!=='ENOENT')throw error;}
     }
     const reservation:Reservation={version:1,status:'reserved',repositoryId:repo.id,issue:expectedIssue,reservationId:randomUUID(),outcome:null};
-    reserved=true;await persist(root,reservation);
+    reserved=true;await persist(root,reservation,journal);
     const grants=(await readApprovalGrants(root,registry)).filter(grant=>grant.repositoryId===repo.id&&grant.issue===expectedIssue);
-    const outcome=parseOutcome(await (run??((target,issue)=>runTrustedWorker(target,issue,handoff.profile,grants)))(repo,expectedIssue),expectedIssue);
+    let recovery:ReturnType<typeof parseRecovery>|undefined;
+    let saved:unknown;
+    try{saved=(await readPrivateJson(join(repo.stateDirectory,'state.json'))).value;}catch(error){if(!(error instanceof Error)||!('code' in error)||error.code!=='ENOENT')throw error;}
+    if(record(saved)){
+      const parked=Array.isArray(saved.humanWaiting)?saved.humanWaiting.filter(record).find(item=>record(item.current)&&item.current.number===expectedIssue):undefined;
+      const current=parked?.current??saved.current;
+      if(record(current)&&current.number===expectedIssue&&recoveryState(current)==='automatic_retry_pending'){
+        if(current.worktree!==join(repo.stateDirectory,'worktrees',`issue-${expectedIssue}`)||typeof current.branch!=='string')throw new Error('recovery_scope_invalid');
+        const target=current as {worktree:string;branch:string;base?:unknown};
+        if(await approvalGit('git',['rev-parse','--path-format=absolute','--git-common-dir'],{cwd:target.worktree})!==await approvalGit('git',['rev-parse','--path-format=absolute','--git-common-dir'],{cwd:repo.clonePath}))throw new Error('recovery_scope_invalid');
+        const issue=await ghRead(repo.repo,`issues/${expectedIssue}`);
+        if(!record(issue)||issue.number!==expectedIssue||issue.state!=='open'||typeof issue.body!=='string')throw new Error('recovery_scope_invalid');
+        recovery=parseRecovery({issue:issueBinding({body:issue.body}),diff:await diffBinding(target,approvalGit)});
+      }
+    }
+    const reviewBinding=await readReviewBinding(root,registry,repo.id,expectedIssue);
+    const reevaluation=await readReevaluation(root,registry,repo.id,expectedIssue);
+    const outcome=parseOutcome(await (run??((target,issue)=>runTrustedWorker(target,issue,handoff.profile,grants,recovery,reevaluation,reviewBinding)))(repo,expectedIssue),expectedIssue);
     // A surviving lock is not treated as a safe completion, even with a successful IPC.
     try{await lstat(join(repo.stateDirectory,'worker.lock'));throw new Error('worker_completion_unknown');}
     catch(error){if(!(error instanceof Error) || !('code' in error) || error.code!=='ENOENT')throw error;}
-    await persist(root,{...reservation,status:'settled',outcome});reserved=false;return outcome;
+    await persist(root,{...reservation,status:'settled',outcome},journal);reserved=false;return outcome;
   } finally {
     await lock.close();
     // Unknown child termination or uncertain persistence leaves lock + reservation for
     // human reconciliation. Never guess that worker/Codex grandchildren are dead.
-    if(!reserved)await unlink(join(root,'dispatch.lock'));
+    if(!reserved)await unlink(join(root,lockName));
   }
+}
+
+// Hold one short admission lane only while checking shared gates and saving the
+// repository reservation. Worker execution and its journal use independent lanes.
+async function dispatchParallel(options:DispatchOptions):Promise<DispatchOutcome> {
+ const {registry,directory,repositoryId}=options;
+ if(!Number.isSafeInteger(registry.globalConcurrency)||registry.globalConcurrency<2||registry.globalConcurrency>32||!registry.repositories.some(repo=>repo.id===repositoryId))throw new Error('dispatch_not_authorized');
+ const info=await lstat(directory);if(!info.isDirectory()||info.isSymbolicLink()||info.uid!==process.getuid?.()||(info.mode&0o077)!==0||await realpath(directory)!==directory)throw new Error('dispatch_directory_unsafe');
+ await assertRecoveryClear(directory);
+ const admissionPath=join(directory,'dispatch-admission.lock');
+ let admission:Awaited<ReturnType<typeof open>>|undefined;
+ for(let attempt=0;attempt<50;attempt++){
+  try{admission=await open(admissionPath,constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600);break;}
+  catch(error){if(!(error instanceof Error)||!('code' in error)||error.code!=='EEXIST')throw error;await new Promise(resolve=>setTimeout(resolve,20));}
+ }
+ if(!admission)throw new Error('dispatch_reconciliation_required');
+ const release=async()=>{if(admission){await admission.close();admission=undefined;await unlink(admissionPath);}};
+ try{
+  await assertRecoveryClear(directory);
+  try{await lstat(join(directory,'dispatch.lock'));throw new Error('dispatch_reconciliation_required');}catch(error){if(!(error instanceof Error)||!('code' in error)||error.code!=='ENOENT')throw error;}
+  const known=new Set(options.managedActiveRepositoryIds??[]);const active:string[]=[];
+  for(const name of ['dispatch.json',...registry.repositories.map(repo=>`dispatch.${repo.id}.json`)]){
+   let value:unknown;try{value=(await readPrivateJson(join(directory,name))).value;}catch(error){if(error instanceof Error&&'code' in error&&error.code==='ENOENT')continue;throw error;}
+   if(!record(value)||Object.keys(value).length!==6||value.version!==1||typeof value.repositoryId!=='string'||!registry.repositories.some(repo=>repo.id===value.repositoryId)||!Number.isSafeInteger(value.issue)||(value.issue as number)<=0||typeof value.reservationId!=='string'||!['settled','reserved'].includes(String(value.status))||name!=='dispatch.json'&&name!==`dispatch.${value.repositoryId}.json`)throw new Error('dispatch_reconciliation_required');
+   if(value.status==='reserved'){
+    if(name==='dispatch.json'||value.outcome!==null||value.repositoryId===repositoryId||!known.has(value.repositoryId))throw new Error('dispatch_reconciliation_required');
+    await lstat(join(directory,`dispatch.${value.repositoryId}.lock`));active.push(value.repositoryId);
+   }else{
+    const prior=parseOutcome(value.outcome,value.issue as number);
+    if(prior.status==='quota-wait'&&(prior.nextRetryAt===null||(options.now??Date.now)()<prior.nextRetryAt))throw new Error('shared_quota_wait');
+   }
+  }
+  for(const repo of registry.repositories){
+   try{await lstat(join(directory,`dispatch.${repo.id}.lock`));if(!active.includes(repo.id))throw new Error('dispatch_reconciliation_required');}
+   catch(error){if(!(error instanceof Error)||!('code' in error)||error.code!=='ENOENT')throw error;}
+  }
+  if(active.length>=registry.globalConcurrency)throw new Error('dispatch_capacity_reached');
+  return await dispatchInLane({...options,run:async(repo,issue)=>{
+   // The per-repository lock and synced reservation already exist at this point.
+   const grants=(await readApprovalGrants(directory,registry)).filter(grant=>grant.repositoryId===repo.id&&grant.issue===issue);
+   await release();
+   return options.run?options.run(repo,issue):runTrustedWorker(repo,issue,options.handoff.profile,grants);
+  }},`dispatch.${repositoryId}.json`,`dispatch.${repositoryId}.lock`,active);
+ }finally{await release();}
 }

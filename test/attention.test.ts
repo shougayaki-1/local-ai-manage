@@ -34,3 +34,17 @@ test('notifier includes current and parked jobs, throttles failure, and sanitize
  const raw={version:1,repo:source.repo,status:'idle',paused:false,current:null,humanWaiting:[{current:{number:39,stage:'implement',session:'SECRET',worktree:'/private',base:'PRIVATE',result:{summary:'PRIVATE',reasons:[{category:'external_service',check:'build'}]}},reason:'needs_human',since:1000}]};
  const projected=projectState(raw,configured,1000,1000);for(const secret of ['SECRET','PRIVATE','/private'])assert.ok(!JSON.stringify(projected).includes(secret));assert.equal(projected.humanWaiting?.[0]?.job.issue,39);
 });
+
+test('retry exhaustion has a fixed investigation notification while operational retry requires no human approval',()=>{
+ const exhausted={...event,reason:'verification_retry_exhausted',categories:['local_verification','verification_retry_limit']};
+ assert.match(attentionComment(exhausted,repo,login).body,/検証の再試行上限/);
+ const configured={id:'example--care-record',repo,clonePath:'/unused',stateDirectory:'/unused',enabled:true,ownership:'observe-only' as const,defaultModel:'gpt-6.1-sol' as const,defaultEffort:'medium' as const,maximumConcurrency:1 as const};
+ const raw={version:1,repo,status:'needs-human',paused:true,current:{number:59,stage:'implement',base:'a'.repeat(40),result:{reasons:[{category:'local_verification',check:'test:ui'}]}}};
+ assert.equal(projectState(raw,configured,0,0).current?.recovery,'automatic_retry_pending');
+});
+
+test('automatic code review waits do not notify humans; real local verification failure still does',async()=>{
+ const snapshot=demoSnapshot();const source=snapshot.repositories[0]!;source.current={...source.current!,reasonCategories:['auth']};source.status='needs-human';source.reason='needs_human';
+ const registry:Registry={version:1,globalConcurrency:1,repositories:[{id:source.id,repo:source.repo,clonePath:'/unused',stateDirectory:'/unused',enabled:true,ownership:'observe-only',defaultModel:'gpt-6.1-sol',defaultEffort:'medium',maximumConcurrency:1,reviewPolicy:'local-automatic'}]};const calls:unknown[]=[];const notifier=new HumanNotifier(registry,login,async(_repo,event)=>{calls.push(event);});
+ await notifier.tick(snapshot,0);assert.equal(calls.length,0);source.reason='automatic_verification_failed';source.current.check='local_db_e2e';await notifier.tick(snapshot,1);assert.equal(calls.length,1);assert.equal((calls[0] as {reason:string}).reason,'verification_retry_exhausted');
+});

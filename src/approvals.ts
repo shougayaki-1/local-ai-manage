@@ -8,7 +8,7 @@ import { registryFingerprint, loadHandoff } from './handoff.ts';
 import { record } from './registry.ts';
 import { readPrivateJson } from './snapshot.ts';
 import { ghRead, queueMetadata, type GitHubRead } from './github-queue.ts';
-import { approvableReasons, parseGrant, parseE2e, pendingReasons, approvalStatus, issueBinding, diffBinding, protectedReasons, type Grant, type Binding, type E2eScope } from './approval-policy.ts';
+import { automaticReason, operationalReasons, recoveryState, approvableReasons, parseGrant, parseE2e, pendingReasons, approvalStatus, issueBinding, diffBinding, protectedReasons, type Grant, type Binding, type E2eScope } from './approval-policy.ts';
 import type { Registry, Repository, Snapshot, Job } from './types.ts';
 
 export interface ApprovalRequest {requestId:string;expectedRevision:number;repositoryId:string;issue:number;reason:string;e2e:E2eScope|null}
@@ -58,6 +58,7 @@ export class Approvals {
   return new Approvals(registry,controller,state,options.read??ghRead,options.git??approvalGit);
  }
  grants():Grant[]{const latest=new Map<string,Grant>();for(const item of this.state.operations)latest.set(`${item.grant.repositoryId}:${item.grant.issue}:${item.grant.reason}`,item.grant);return structuredClone([...latest.values()]);}
+ latestId(repositoryId:string,issue:number,reason:string):string|null{for(let i=this.state.operations.length-1;i>=0;i--){const command=this.state.operations[i]!.command;if(command.repositoryId===repositoryId&&command.issue===issue&&command.reason===reason)return command.requestId;}return null;}
  revision():number{return this.state.revision;}
  ack(id:string):ApprovalAck|null{return this.state.operations.find(item=>item.command.requestId===id)?.ack??null;}
  private async current(repo:Repository,issue:number){
@@ -70,7 +71,7 @@ export class Approvals {
   if(typeof current.worktree!=='string'||current.worktree!==join(repo.stateDirectory,'worktrees',`issue-${issue}`)||typeof current.branch!=='string'||!current.branch.startsWith(`codex/issue-${issue}-`))throw new ControlError('approval_worktree_unsafe',409);
   return current as Record<string,unknown>&{number:number;worktree:string;branch:string};
  }
- private async scope(repo:Repository,number:number){
+ async scope(repo:Repository,number:number){
   const current=await this.current(repo,number);const handoffs=await loadHandoff(join(this.controller.directoryPath(),'handoff.json'),this.registry);
   const profile=handoffs.find(item=>item.repositoryId===repo.id)?.profile;if(!profile)throw new ControlError('approval_requires_managed_repository',409);
   const raw=(await readPrivateJson(join(repo.stateDirectory,'state.json'))).value;
@@ -81,6 +82,10 @@ export class Approvals {
   if(labels.some(label=>['codex:blocked','codex:failed','codex:running'].includes(String(label))))throw new ControlError('approval_issue_ineligible',409);
   const metadata=queueMetadata(issue.body);
   for(const dependency of metadata.dependencies){const item=await this.read(repo.repo,`issues/${dependency}`);if(!record(item)||item.number!==dependency||item.state!=='closed')throw new ControlError('approval_dependency_blocked',409);}
+  const pulls=await this.read(repo.repo,'pulls?state=open&per_page=100');
+  const timeline=await this.read(repo.repo,`issues/${number}/timeline?per_page=100`);
+  if(!Array.isArray(pulls)||pulls.length>=100||pulls.some(item=>!record(item)||!record(item.head)||typeof item.head.ref!=='string')||!Array.isArray(timeline)||timeline.length>=100||timeline.some(item=>!record(item)||item.source!==undefined&&item.source!==null&&(!record(item.source)||item.source.issue!==undefined&&(!record(item.source.issue)||!['open','closed'].includes(String(item.source.issue.state))))))throw new ControlError('approval_association_unavailable',409);
+  if(pulls.some(item=>record(item)&&record(item.head)&&typeof item.head.ref==='string'&&item.head.ref.startsWith(`codex/issue-${number}-`))||timeline.some(item=>record(item)&&record(item.source)&&record(item.source.issue)&&item.source.issue.pull_request&&item.source.issue.state==='open'))throw new ControlError('approval_related_pr_blocked',409);
   const bindings:{issue:Binding;diff?:Binding}={issue:issueBinding({body:issue.body})};
   let reasons=pendingReasons(current);
   if(current.base!==undefined){
@@ -89,9 +94,9 @@ export class Approvals {
    bindings.diff=await diffBinding(current,this.git);reasons=[...new Set([...reasons,...await protectedReasons(current,this.git,profile)])];
    if(JSON.stringify(bindings.diff)!==JSON.stringify(await diffBinding(current,this.git)))throw new ControlError('approval_scope_changed',409);
   }
-  return {current,bindings,reasons,profile};
+  return {current,bindings,reasons,profile,issueUpdatedAt:typeof issue.updated_at==='string'&&Number.isFinite(Date.parse(issue.updated_at))?Date.parse(issue.updated_at):null};
  }
- apply(value:unknown):Promise<ApprovalAck>{
+ apply(value:unknown,expectedBindings?:{issue:Binding;diff?:Binding}):Promise<ApprovalAck>{
   const command=parseApproval(value,this.registry);
   return this.controller.dispatchGate(async()=>{
    if(!this.writable)throw new ControlError('approval_storage_uncertain',503);
@@ -100,13 +105,14 @@ export class Approvals {
    if(prior){if(JSON.stringify(prior.command)!==JSON.stringify(command))throw new ControlError('request_id_conflict',409);return {...prior.ack};}
    if(command.expectedRevision!==this.state.revision)throw new ControlError('revision_conflict',409);
    if(this.state.operations.length>=1024)throw new ControlError('request_history_full',503);
-   if(this.controller.view().scheduler?.active)throw new ControlError('approval_worker_active',409);
-   try{await lstat(join(this.controller.directoryPath(),'dispatch.lock'));throw new ControlError('approval_worker_active',409);}catch(error){if(!(error instanceof Error)||!('code' in error)||error.code!=='ENOENT')throw error;}
+   if((this.controller.view().scheduler?.activeJobs??[this.controller.view().scheduler?.active]).some(job=>job?.repositoryId===command.repositoryId))throw new ControlError('approval_worker_active',409);
+   for(const name of ['dispatch.lock','dispatch-admission.lock',`dispatch.${command.repositoryId}.lock`]){try{await lstat(join(this.controller.directoryPath(),name));throw new ControlError('approval_worker_active',409);}catch(error){if(!(error instanceof Error)||!('code' in error)||error.code!=='ENOENT')throw error;}}
    const repo=this.registry.repositories.find(repo=>repo.id===command.repositoryId)!;
    if(await realpath(repo.stateDirectory)!==repo.stateDirectory)throw new ControlError('approval_scope_unavailable',503);
    const lock=await open(join(repo.stateDirectory,'worker.lock'),constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600).catch(()=>{throw new ControlError('approval_worker_active',409);});
    try {
     const scope=await this.scope(repo,command.issue);
+    if(expectedBindings&&JSON.stringify(scope.bindings)!==JSON.stringify(expectedBindings))throw new ControlError('approval_scope_changed',409);
     if(!scope.reasons.includes(command.reason))throw new ControlError('approval_reason_not_pending',409);
     if(command.reason==='manual_e2e'&&scope.profile!=='care-record-v1')throw new ControlError('approval_e2e_profile_unsupported',409);
     const binding=command.reason==='manual_e2e'?scope.bindings.issue:scope.bindings.diff;
@@ -138,6 +144,7 @@ export class Approvals {
   let scope:Awaited<ReturnType<Approvals['scope']>>|null=null;
   try{scope=await this.scope(repo,job.issue);}catch{/* Unverified scope never claims approval. */}
   if(scope)job.reasonCategories=scope.reasons;
-  job.approvals=job.reasonCategories.map(reason=>({reason,status:scope?approvalStatus(this.grants(),repo.id,repo.repo,job.issue,reason,reason==='manual_e2e'?scope.bindings.issue:scope.bindings.diff):this.grants().some(grant=>grant.repositoryId===repo.id&&grant.issue===job.issue&&grant.reason===reason)?'stale':'missing',approvable:approvableReasons.includes(reason)&&!(reason==='manual_e2e'&&scope?.profile!=='care-record-v1')}));
+  job.recovery=scope?recoveryState(scope.current)??undefined:job.reasonCategories.some(reason=>operationalReasons.includes(reason))?'human_investigation_required':undefined;
+  job.approvals=job.reasonCategories.filter(reason=>approvableReasons.includes(reason)).map(reason=>({reason,status:scope&&automaticReason(repo.reviewPolicy,scope.profile,reason)?'automatic':scope?approvalStatus(this.grants(),repo.id,repo.repo,job.issue,reason,reason==='manual_e2e'?scope.bindings.issue:scope.bindings.diff):this.grants().some(grant=>grant.repositoryId===repo.id&&grant.issue===job.issue&&grant.reason===reason)?'stale':'missing',approvable:!automaticReason(repo.reviewPolicy,scope?.profile,reason)&&approvableReasons.includes(reason)&&!(reason==='manual_e2e'&&scope?.profile!=='care-record-v1')}));
  }
 }

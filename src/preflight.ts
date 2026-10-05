@@ -22,8 +22,8 @@ export async function preflight(registry:Registry,directory:string,{github=false
  add(null,'handoff',handoffs?'pass':'blocked',handoffs?'registry_bound_attestation_present':'handoff_missing_or_invalid');
  if(safe){
   try{await assertRecoveryClear(directory);add(null,'recovery','pass','no_recovery_markers');}catch{add(null,'recovery','blocked','recovery_required');}
-  for(const name of ['controller.lock','dispatch.lock']){try{const present=await exists(join(directory,name));add(null,name,present&&!(name==='controller.lock'&&activeDashboard)?'blocked':'pass',present?(name==='controller.lock'&&activeDashboard?'dashboard_controller_active':'lock_present_no_automatic_reclaim'):'lock_absence_is_not_stop_proof');}catch{add(null,name,'blocked','lock_unavailable');}}
-  for(const name of ['dispatch.json','scheduler.json','recovery-quota.json','controller.json']){try{if(await exists(join(directory,name)))add(null,name,'review-required','saved_controller_evidence_requires_review');}catch{add(null,name,'blocked','controller_evidence_unavailable');}}
+  for(const name of ['controller.lock','dispatch.lock','dispatch-admission.lock',...registry.repositories.map(repo=>`dispatch.${repo.id}.lock`)]){try{const present=await exists(join(directory,name));add(null,name,present&&!(name==='controller.lock'&&activeDashboard)?'blocked':'pass',present?(name==='controller.lock'&&activeDashboard?'dashboard_controller_active':'lock_present_no_automatic_reclaim'):'lock_absence_is_not_stop_proof');}catch{add(null,name,'blocked','lock_unavailable');}}
+  for(const name of ['dispatch.json','scheduler.json','recovery-quota.json','controller.json',...registry.repositories.map(repo=>`dispatch.${repo.id}.json`)]){try{if(await exists(join(directory,name)))add(null,name,'review-required','saved_controller_evidence_requires_review');}catch{add(null,name,'blocked','controller_evidence_unavailable');}}
  }
  const engine=await import(new URL(import.meta.url.endsWith('.ts')?'../engine/care-record/profile.mjs':'../../engine/care-record/profile.mjs',import.meta.url).href);
  for(const repo of registry.repositories){
