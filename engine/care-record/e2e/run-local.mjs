@@ -1,8 +1,8 @@
 import { createServer } from 'node:net';
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, lstatSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { platform } from 'node:os';
 import { resolve } from 'node:path';
 import { assertLocalSupabaseEnvironment } from './local-environment.mjs';
 import { parseE2e } from '../lib/human-approval.mjs';
@@ -22,14 +22,16 @@ assertLocalSupabaseEnvironment(process.env, { requireApi: false });
 async function run(binary,args,options={}) {
  if(stopping&&!options.cleanup)throw new Error('Local verification interrupted');
  return await new Promise((resolveRun,reject)=>{
-  const child=spawn(binary,args,{cwd:options.cwd??(binary==='supabase'?workdir:repoRoot),env:options.env??process.env,stdio:['pipe','pipe','pipe']});
+  const inherited=options.env??process.env;
+  const cliEnv=Object.fromEntries(['PATH','HOME','TMPDIR','XDG_CONFIG_HOME','XDG_CACHE_HOME','XDG_DATA_HOME','LANG','LC_ALL','USER','LOGNAME','CI'].filter(name=>inherited[name]).map(name=>[name,inherited[name]]));
+  const child=spawn(binary,args,{cwd:options.cwd??(binary==='supabase'?workdir:repoRoot),env:{...(binary==='supabase'||binary==='docker'?cliEnv:inherited),SUPABASE_HOME:resolve(workdir,'cli-home'),SUPABASE_TELEMETRY_DISABLED:'1',DO_NOT_TRACK:'1'},stdio:['pipe','pipe','pipe']});
   child.stdin.on('error',()=>{});child.stdin.end(options.input);
-  activeChild=child;let output='';let bytes=0;let exceeded=false;
+  activeChild=child;let diagnostic='';let output='';let bytes=0;let exceeded=false;
   const inspect=chunk=>{bytes+=chunk.length;if(bytes>20_000_000){exceeded=true;child.kill('SIGTERM');}};
-  child.stdout.on('data',chunk=>{inspect(chunk);if(!exceeded)output+=chunk;});child.stderr.on('data',inspect);
+  child.stdout.on('data',chunk=>{inspect(chunk);if(!exceeded)output+=chunk;});child.stderr.on('data',chunk=>{inspect(chunk);if(diagnostic.length<8192)diagnostic+=chunk.toString().slice(0,8192-diagnostic.length);});
   const timeout=setTimeout(()=>{exceeded=true;child.kill('SIGTERM');},options.cleanup?20000:900000);
-  child.once('error',()=>{clearTimeout(timeout);reject(new Error('Local verification prerequisite unavailable'));});
-  child.once('close',code=>{clearTimeout(timeout);if(activeChild===child)activeChild=null;if(code===0&&!exceeded&&(options.cleanup||!stopping))resolveRun(output);else {const error=new Error('Local verification failed; output omitted');error.assertions=[...output.matchAll(/(?:^|\n)\s*not ok\s+(\d+)/g)].map(match=>Number(match[1])).filter(number=>number>0&&number<=100000).slice(0,32);reject(error);}});
+  child.once('error',error=>{process.stderr.write(`Local verification prerequisite: ${['ENOENT','EACCES','EPERM'].includes(error.code)?error.code:'spawn_failed'}\n`);clearTimeout(timeout);reject(new Error('Local verification prerequisite unavailable'));});
+  child.once('close',code=>{clearTimeout(timeout);if(activeChild===child)activeChild=null;if(code===0&&!exceeded&&(options.cleanup||!stopping))resolveRun(output);else {const prerequisite=/unknown (?:option|flag)|unrecognized/i.test(diagnostic)?'unsupported_cli':/config|toml|schema/i.test(diagnostic)?'config':/docker|daemon|socket/i.test(diagnostic)?'docker':/download|pull|registry|network/i.test(diagnostic)?'image_or_network':'local_check';process.stderr.write(`Local verification prerequisite: ${prerequisite}\n`);const error=new Error('Local verification failed; output omitted');error.assertions=[...output.matchAll(/(?:^|\n)\s*not ok\s+(\d+)/g)].map(match=>Number(match[1])).filter(number=>number>0&&number<=100000).slice(0,32);reject(error);}});
  });
 }
 function copyRegularTree(source,target){
@@ -40,17 +42,16 @@ function copyRegularTree(source,target){
 }
 
 async function freePort(usedPorts) {
-  const server = createServer();
-  await new Promise((resolveListen, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolveListen);
-  });
-  const address = server.address();
-  const port = typeof address === 'object' && address ? address.port : undefined;
-  await new Promise((resolveClose, reject) => server.close(error => error ? reject(error) : resolveClose()));
-  if (!port || usedPorts.has(port)) return freePort(usedPorts);
-  usedPorts.add(port);
-  return port;
+ // Avoid the OS ephemeral-client range and reserve spacing for CLI adjacent ports.
+ for(let attempt=0;attempt<128;attempt++){
+  const port=randomInt(2000,3000)*10;if(usedPorts.has(port))continue;const sockets=[];
+  try{
+   for(const candidate of [port,port+1]){const socket=createServer();sockets.push(socket);await new Promise((resolveListen,reject)=>{socket.once('error',reject);socket.listen(candidate,'0.0.0.0',resolveListen);});}
+   usedPorts.add(port);return port;
+  }catch(error){if(error.code!=='EADDRINUSE')throw error;}
+  finally{await Promise.all(sockets.filter(socket=>socket.listening).map(socket=>new Promise((resolveClose,reject)=>socket.close(error=>error?reject(error):resolveClose()))));}
+ }
+ throw new Error('Local verification ports unavailable');
 }
 
 async function writeIsolatedConfig(workdir) {
@@ -111,7 +112,7 @@ const progress=value=>{phase=value;process.stdout.write(JSON.stringify({event:'l
 let cleanupSucceeded=true;
 
 try {
-  workdir = mkdtempSync(resolve(tmpdir(), 'care-record-e2e-'));
+  workdir = mkdtempSync(resolve(platform()==='darwin'?'/private/tmp':'/tmp', 'care-record-e2e-'));
   projectId = await writeIsolatedConfig(workdir);
 
   stackStartAttempted = true;
