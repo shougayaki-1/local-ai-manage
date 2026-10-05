@@ -114,3 +114,10 @@ Issue #7/#8 の運用復旧・GitHub確認経路を、現在稼働中の全体2�
 shutdownは受付停止、observer abort、実行中jobとGitHub書込みのdrainの順。registryの同時実行数、保存quota、repoのEnable/Resume、handoffは維持する。先行PRの「稼働並列経路を取り込んでいない」という記録は、そのPR単独時点の検証範囲である。
 
 統合後の管理アプリ・worker全回帰、typecheck、lint、build、diff-checkを実施する。CareRecord #59の保存worktreeでは標準Storybook UI 68件が成功した。独立baselineの使い捨てDBではmigration、SQL、isolation、生成型照合が成功した。E2E復旧シナリオの画面遷移競合はCareRecord側の検証課題として扱い、管理側の検証要件を緩和しない。
+
+
+2026-10-06の適用確認: PR #11をmainへ統合し、元working changesを2950b6aとstashへ保全した。予約/worker lockが空の状態でprivate backupを保存し、controller/statusを通常終了、mainのartifactをbuildして起動した。registry/globalConcurrency=2とhandoffはbyte/構造一致。Issue #7はGitHubのclosedとPR #11のmerged SHAを照合し、元の保存state全体をprivate external-resolutionsへ保存してidleへ整合した。#57の旧external_service:build理由はisolated synthetic buildの成功とdiffBinding一致を確認してその項目だけを除いた。session/base/failure/quota履歴は保持する。
+
+復旧画面E2Eの共通fixtureには、/appのcommitを先に待ち、その後の/setupへの遷移と復旧ログインをassertする修正を保存worktree #47/#57/#48/#59/#84へ適用した。Context7でPlaywrightのwaitForURL/commitを確認し、PC/mobileの復旧specが成功、各worktreeのtypecheck/lint/diff-checkが成功。retry/timeout/skipや業務の認証・権限は変更していない。#39の以前の差分承認停止は別途保持する。
+
+再開試験で、current #84がquota-waitだとparked needs-humanのscope読取りまで拒否され、GitHub review更新を待つschedulerがworker_state_unavailableへ止まることが判明した。保留jobのscopeだけをquota-wait中も読めるように修正。currentのquota job自体への承認は拒否し、共有quota期限・不明期限のdispatch停止を維持する。実5件のscope読取りと、期限前に開始しない/期限後に保存active jobを再開する統合回帰を確認した。

@@ -64,7 +64,7 @@ export class Approvals {
  private async current(repo:Repository,issue:number){
   if(await realpath(repo.stateDirectory)!==repo.stateDirectory)throw new ControlError('approval_scope_unavailable',503);
   const raw=(await readPrivateJson(join(repo.stateDirectory,'state.json'))).value;
-  if(!record(raw)||raw.version!==1||raw.repo!==repo.repo||!Array.isArray(raw.humanWaiting??[])||!['needs-human','idle','running'].includes(String(raw.status)))throw new ControlError('approval_worker_unavailable',409);
+  if(!record(raw)||raw.version!==1||raw.repo!==repo.repo||!Array.isArray(raw.humanWaiting??[])||!['needs-human','idle','running','quota-wait'].includes(String(raw.status)))throw new ControlError('approval_worker_unavailable',409);
   const parked=(raw.humanWaiting as unknown[]|undefined)?.filter(record).find(item=>record(item.current)&&item.current.number===issue);
   const current=parked?.current??raw.current;
   if(!record(current)||current.number!==issue||(!parked&&(raw.status!=='needs-human'||raw.paused!==true))||!['prepare','implement','publish'].includes(String(current.stage)))throw new ControlError('approval_current_issue_mismatch',409);

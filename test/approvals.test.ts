@@ -127,3 +127,16 @@ test('trusted opt-in #59 policy projects human categories automatic separately f
  const restored=await Approvals.create(registry,f.controller,{read});job=(await restored.project(await collectSnapshot(registry))).repositories[0]!.current!;assert.ok(job.approvals!.every(item=>item.status==='automatic'));
  assert.notEqual(registryFingerprint(registry),registryFingerprint(f.registry));assert.equal(registryFingerprint({...f.registry,repositories:[{...f.repo,reviewPolicy:'manual'}]}),registryFingerprint(f.registry));
 });
+
+
+test('parked review is readable during quota wait without changing the active job or quota',async t=>{
+ const f=await fixture(t);const savedPath=join(f.repo.stateDirectory,'state.json');
+ for(const nextRetryAt of [null,Date.now()+3600000]){
+  const active={...f.current,number:84,branch:'codex/issue-84-test',worktree:join(f.repo.stateDirectory,'worktrees/issue-84'),stage:'implement',failures:1,quotaWaits:2,session:'saved-session'};
+  const saved={...f.saved,status:'quota-wait',paused:false,current:active,nextRetryAt,quotaWaitStarted:Date.now(),humanWaiting:[{current:f.current,reason:'needs_human',since:Date.now()}]};
+  await writeFile(savedPath,JSON.stringify(saved),{mode:0o600});const before=await readFile(savedPath,'utf8');
+  const scope=await f.approvals.scope(f.repo,48);assert.equal(scope.current.number,48);assert.ok(scope.reasons.includes('manual_e2e'));
+  await assert.rejects(f.approvals.scope(f.repo,84),/current_issue_mismatch/);
+  assert.equal(await readFile(savedPath,'utf8'),before);
+ }
+});
