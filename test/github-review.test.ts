@@ -185,3 +185,15 @@ test('#59 automatic human categories and operational retry need no GitHub reacti
  const f=await fixture(t,['db','auth','permission','tenant','manual_e2e','security','local_verification','sandbox_capability'],null,{reviewPolicy:'local-automatic'});await f.tick();await f.tick();
  assert.equal(f.approvals.revision(),0);const job=(await f.snapshot()).repositories[0]!.current!;assert.equal(job.githubReviewReady,true);assert.ok(job.approvals!.every(item=>item.status==='automatic'));assert.match(f.comments.get(101)!.body,/security: automatic/);assert.ok(!f.comments.get(101)!.body.includes('承認対象'));assert.ok(!f.comments.get(101)!.body.includes('scope required'));
 });
+
+test('parked automatic review during quota wait preserves quota and lets the active session resume only after reset',async t=>{
+ const f=await fixture(t,['auth','local_verification'],null,{reviewPolicy:'local-automatic'});
+ const path=join(f.repo.stateDirectory,'state.json');const nextRetryAt=f.clock.now+1000;
+ const active={...f.current,number:84,branch:'codex/issue-84-test',worktree:join(f.repo.stateDirectory,'worktrees/issue-84'),failures:1,quotaWaits:2,session:'active-saved-session'};
+ const saved={...f.saved,status:'quota-wait',paused:false,current:active,nextRetryAt,quotaWaitStarted:f.clock.now,humanWaiting:[{current:f.current,reason:'needs_human',since:f.clock.now}]};
+ await writeFile(path,JSON.stringify(saved),{mode:0o600});const before=await readFile(path,'utf8');
+ const calls:number[]=[];const scheduler=await Scheduler.create({registry:f.registry,controller:f.controller,handoffs:[{repositoryId:f.repo.id,profile:'care-record-v1',standaloneStopped:true,scope:'all-registered-workers'}],snapshot:async()=>{await f.tick();return f.snapshot();},now:()=>f.clock.now,dispatch:async(_id,issue)=>{calls.push(issue);return {version:1,issue,status:'idle',paused:false,currentIssue:null,nextRetryAt:null};}});
+ t.after(()=>scheduler.close());await f.resume();await scheduler.tick();
+ assert.equal(f.posts,1);assert.deepEqual(calls,[]);assert.equal(scheduler.view().reason,'shared_quota_wait');assert.equal(f.approvals.revision(),0);
+ f.clock.now=nextRetryAt;await scheduler.tick();await scheduler.settled();assert.deepEqual(calls,[84]);assert.equal(await readFile(path,'utf8'),before);
+});
