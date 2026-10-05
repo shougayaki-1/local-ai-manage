@@ -194,3 +194,7 @@ MacとスマホでTailscaleに接続し、Macの管理画面の「スマホ用�
 controllerとstatusはログイン時にLaunchAgentで起動します。旧CareRecord standalone agentは無効化・登録解除済みです。元state、Issue履歴、session/worktreeと移管前backupは保持しています。GUIを閉じてもserviceは継続します。停止する場合はGUIのPause dispatchで新規実行を止め、実行中jobの完了を待ちます。
 
 実workerでCareRecord [Draft PR #75](https://github.com/shougayaki-1/care-record/pull/75)、local-ai-manage [Draft PR #3](https://github.com/shougayaki-1/local-ai-manage/pull/3) を作成しました。業務変更のmergeは人がレビューします。遠隔statusは両repoの専用固定コメントをActionsが更新・監視しています。詳しい操作と検証証跡は [運用手順](docs/live-operation.md) を参照してください。
+
+## GitHub Issue を日常の確認窓口にする
+
+managed controller を `--execute --github` で使用すると、保存 needs-human の Issue に固定 review/status comment を作成・更新する。owner/登録 stable reviewer ID の current request への 👍 を private approval grant に変換し、最後の条件が揃えば追加 Resume なしで保存 session/worktree を再開する。specification は本文決定更新後の再評価のみ、operational blocker は固定 parent verification で処理する。管理画面は補助UIとして保持する。初期 reviewer/E2E scope、stale、API失敗時の安全契約は [GitHub Issue の承認操作](docs/github-human-review.md) を参照。

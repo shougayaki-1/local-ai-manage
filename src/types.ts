@@ -7,6 +7,7 @@ export interface Repository {
   ownership: 'observe-only';
   defaultModel: 'gpt-6.1-sol';
   defaultEffort: 'low' | 'medium' | 'high' | 'xhigh';
+  githubReview?: {reviewerIds:number[];e2e:{specs:string[];projects:string[]}|null};
   maximumConcurrency: 1;
 }
 export interface Registry { version: 1; globalConcurrency: 1; repositories: Repository[] }
@@ -15,6 +16,8 @@ export interface Job {
   failures: number | null; quotaWaits: number | null;
   model: string | null; effort: string | null;
   reasonCategories: string[]; check: string | null; prUrl: string | null;
+  githubReviewReady?: boolean;
+  reevaluationReady?: boolean;
   recovery?: 'automatic_retry_pending'|'human_investigation_required';
   approvals?: {reason:string;status:'missing'|'approved'|'stale';approvable:boolean}[];
 }

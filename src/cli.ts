@@ -1,3 +1,4 @@
+import { GitHubReviews } from './github-review.ts';
 import { HumanNotifier } from './human-notifier.ts';
 import { Approvals } from './approvals.ts';
 import { startSupervisorHeartbeat } from './supervisor-heartbeat.ts';
@@ -90,14 +91,16 @@ async function main() {
   const snapshot=async()=>{
     const value=registry?await collectSnapshot(registry,Date.now(),controlDirectory):demoSnapshot();
     if(observer) { void observer.refresh(); value.queue=observer.snapshot(); }
-    return controller?approvals!.project(controller.project(value)):value;
+    const projected=controller?await approvals!.project(controller.project(value)):value;
+    return reviews?reviews.project(projected):projected;
   };
+  let reviews:GitHubReviews|undefined;
   let approvals:Approvals|undefined;
   try{approvals=registry&&controller?await Approvals.create(registry,controller,{read:github?undefined:async()=>{throw new Error('approval_github_not_connected');}}):undefined;}
   catch(error){observer?.close();await controller?.close();throw error;}
   if (status) { if(observer)await observer.refresh(); console.log(JSON.stringify(await snapshot(),null,2)); observer?.close(); return; }
   let scheduler:Scheduler|undefined;
-  try {if(execute&&registry&&controller){const handoffs=await loadHandoff(join(controller.directoryPath(),'handoff.json'),registry);scheduler=await Scheduler.create({registry,controller,handoffs,snapshot:async()=>{await observer?.refresh();return snapshot();}});}}
+  try {if(execute&&registry&&controller){const handoffs=await loadHandoff(join(controller.directoryPath(),'handoff.json'),registry);if(github)reviews=await GitHubReviews.create(registry,controller,approvals!);scheduler=await Scheduler.create({registry,controller,handoffs,snapshot:async()=>{await observer?.refresh();const value=await snapshot();await reviews?.tick(value);return snapshot();}});}}
   catch(error){observer?.close();await controller?.close();throw error;}
   const readiness=registry&&controller?new ReadinessService(registry,controller.directoryPath(),{activeDashboard:true}):null;
   let dashboard;
@@ -106,6 +109,7 @@ async function main() {
   let socket:Awaited<ReturnType<typeof startDashboardSocket>>|undefined;
   if(headless&&controller){try{socket=await startDashboardSocket(controller.directoryPath(),(mobile)=>dashboard.issueLaunchUrl(mobile));}catch(error){await dashboard.close();await scheduler?.close();observer?.close();await controller.close();throw error;}}
   const supervisor=scheduler&&controller&&registry?await startSupervisorHeartbeat(controller.directoryPath(),registry):undefined;
+  reviews?.start(snapshot);
   scheduler?.start();
   console.log(`Local AI Manage: ${dashboard.origin} (${execute?'managed · dispatch initially follows saved preferences':'observe-only'})`);
   if(dashboard.mobileOrigin)console.log(`Mobile dashboard (${tailscaleAddress?'Tailscale':'same Wi-Fi'}): ${dashboard.mobileOrigin}`);
@@ -117,7 +121,7 @@ async function main() {
     console.log(`One-time login link (expires in 2 minutes): ${dashboard.launchUrl}`);
   }
   let stopping=false;
-  const stop=()=>{if(stopping)return;stopping=true;console.log('Stopping new dispatch; waiting for the current job to finish.');void (scheduler?scheduler.close():Promise.resolve()).then(()=>{observer?.close();return dashboard.close();}).then(()=>supervisor?.close()).then(()=>socket?.close()).then(()=>controller?.close()).then(()=>process.exit(0)).catch(()=>{console.error('Shutdown incomplete; retained state requires review.');process.exitCode=1;});};
+  const stop=()=>{if(stopping)return;stopping=true;console.log('Stopping new dispatch; waiting for the current job to finish.');void Promise.all([reviews?reviews.close():Promise.resolve(),scheduler?scheduler.close():Promise.resolve()]).then(()=>{observer?.close();return dashboard.close();}).then(()=>supervisor?.close()).then(()=>socket?.close()).then(()=>controller?.close()).then(()=>process.exit(0)).catch(()=>{console.error('Shutdown incomplete; retained state requires review.');process.exitCode=1;});};
   process.on('SIGINT',stop); process.on('SIGTERM',stop);
 }
 main().catch(error=>{if(process.argv.some(arg=>['--recovery-plan','--reconcile','--recovery-resume-plan','--resume-recovery'].includes(arg))){console.error('Recovery did not complete. Check the private attestation, unchanged plan, worker locks and recovery markers. Retained evidence requires review; no worker state or lock is cleared automatically.');process.exitCode=1;return;}void error;console.error('Startup failed. Check registry paths, origin, build and CLI flags. Legacy worker state was not changed.');process.exitCode=1;});

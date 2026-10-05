@@ -26,7 +26,7 @@ async function fixture(t:test.TestContext,number=48){
  const saved={version:1,repo:repo.repo,status:'needs-human',paused:true,current,quotaWaitStarted:null,nextRetryAt:null,lastReason:'manual_e2e_required'};
  const save=()=>writeFile(join(state,'state.json'),JSON.stringify(saved),{mode:0o600});await save();
  const issue={number,state:'open',labels:[{name:'codex:needs-human'}],body:'## Acceptance Criteria\nMust run E2E.\n'};
- const read=async(_repo:string,resource:string)=>resource===`issues/${number}`?issue:{number:Number(resource.split('/')[1]),state:'closed'};
+ const read=async(_repo:string,resource:string)=>resource.includes('pulls?')||resource.includes('/timeline?')?[]:resource===`issues/${number}`?issue:{number:Number(resource.split('/')[1]),state:'closed'};
  let approvals=await Approvals.create(registry,controller,{read});
  const request=(reason='manual_e2e'):ApprovalRequest=>({requestId:randomUUID(),expectedRevision:approvals.revision(),repositoryId:repo.id,issue:number,reason,e2e:reason==='manual_e2e'?{specs:['auth'],projects:['chromium','mobile-chrome']}:null});
  const restart=async()=>{await controller.close();controller=await Controller.create(registry,join(root,'controller'));approvals=await Approvals.create(registry,controller,{read});return approvals;};

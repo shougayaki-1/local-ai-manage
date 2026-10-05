@@ -163,3 +163,17 @@ export function parseRecovery(value) {
   if (issue.kind !== 'issue' || diff.kind !== 'diff') throw new Error('invalid_recovery');
   return {issue, diff};
 }
+
+export function parseReevaluation(value) {
+  if (!exact(value, ['requestId','issue','previousIssueDigest','diff']) || typeof value.requestId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value.requestId) || !hash(value.previousIssueDigest)) throw new Error('invalid_reevaluation');
+  const issue=parseBinding(value.issue), diff=value.diff===null?null:parseBinding(value.diff);
+  if(issue.kind!=='issue'||issue.issueDigest===value.previousIssueDigest||diff&&diff.kind!=='diff')throw new Error('invalid_reevaluation');
+  return {...value,issue,diff};
+}
+
+export function parseReviewBinding(value) {
+  if (!exact(value,['issue','diff'])) throw new Error('invalid_review_binding');
+  const issue=parseBinding(value.issue),diff=value.diff===null?null:parseBinding(value.diff);
+  if(issue.kind!=='issue'||diff&&diff.kind!=='diff')throw new Error('invalid_review_binding');
+  return {issue,diff};
+}

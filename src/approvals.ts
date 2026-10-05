@@ -58,6 +58,7 @@ export class Approvals {
   return new Approvals(registry,controller,state,options.read??ghRead,options.git??approvalGit);
  }
  grants():Grant[]{const latest=new Map<string,Grant>();for(const item of this.state.operations)latest.set(`${item.grant.repositoryId}:${item.grant.issue}:${item.grant.reason}`,item.grant);return structuredClone([...latest.values()]);}
+ latestId(repositoryId:string,issue:number,reason:string):string|null{for(let i=this.state.operations.length-1;i>=0;i--){const command=this.state.operations[i]!.command;if(command.repositoryId===repositoryId&&command.issue===issue&&command.reason===reason)return command.requestId;}return null;}
  revision():number{return this.state.revision;}
  ack(id:string):ApprovalAck|null{return this.state.operations.find(item=>item.command.requestId===id)?.ack??null;}
  private async current(repo:Repository,issue:number){
@@ -81,6 +82,10 @@ export class Approvals {
   if(labels.some(label=>['codex:blocked','codex:failed','codex:running'].includes(String(label))))throw new ControlError('approval_issue_ineligible',409);
   const metadata=queueMetadata(issue.body);
   for(const dependency of metadata.dependencies){const item=await this.read(repo.repo,`issues/${dependency}`);if(!record(item)||item.number!==dependency||item.state!=='closed')throw new ControlError('approval_dependency_blocked',409);}
+  const pulls=await this.read(repo.repo,'pulls?state=open&per_page=100');
+  const timeline=await this.read(repo.repo,`issues/${number}/timeline?per_page=100`);
+  if(!Array.isArray(pulls)||pulls.length>=100||pulls.some(item=>!record(item)||!record(item.head)||typeof item.head.ref!=='string')||!Array.isArray(timeline)||timeline.length>=100||timeline.some(item=>!record(item)||item.source!==undefined&&item.source!==null&&(!record(item.source)||item.source.issue!==undefined&&(!record(item.source.issue)||!['open','closed'].includes(String(item.source.issue.state))))))throw new ControlError('approval_association_unavailable',409);
+  if(pulls.some(item=>record(item)&&record(item.head)&&typeof item.head.ref==='string'&&item.head.ref.startsWith(`codex/issue-${number}-`))||timeline.some(item=>record(item)&&record(item.source)&&record(item.source.issue)&&item.source.issue.pull_request&&item.source.issue.state==='open'))throw new ControlError('approval_related_pr_blocked',409);
   const bindings:{issue:Binding;diff?:Binding}={issue:issueBinding({body:issue.body})};
   let reasons=pendingReasons(current);
   if(current.base!==undefined){
@@ -89,9 +94,9 @@ export class Approvals {
    bindings.diff=await diffBinding(current,this.git);reasons=[...new Set([...reasons,...await protectedReasons(current,this.git,profile)])];
    if(JSON.stringify(bindings.diff)!==JSON.stringify(await diffBinding(current,this.git)))throw new ControlError('approval_scope_changed',409);
   }
-  return {current,bindings,reasons,profile};
+  return {current,bindings,reasons,profile,issueUpdatedAt:typeof issue.updated_at==='string'&&Number.isFinite(Date.parse(issue.updated_at))?Date.parse(issue.updated_at):null};
  }
- apply(value:unknown):Promise<ApprovalAck>{
+ apply(value:unknown,expectedBindings?:{issue:Binding;diff?:Binding}):Promise<ApprovalAck>{
   const command=parseApproval(value,this.registry);
   return this.controller.dispatchGate(async()=>{
    if(!this.writable)throw new ControlError('approval_storage_uncertain',503);
@@ -107,6 +112,7 @@ export class Approvals {
    const lock=await open(join(repo.stateDirectory,'worker.lock'),constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600).catch(()=>{throw new ControlError('approval_worker_active',409);});
    try {
     const scope=await this.scope(repo,command.issue);
+    if(expectedBindings&&JSON.stringify(scope.bindings)!==JSON.stringify(expectedBindings))throw new ControlError('approval_scope_changed',409);
     if(!scope.reasons.includes(command.reason))throw new ControlError('approval_reason_not_pending',409);
     if(command.reason==='manual_e2e'&&scope.profile!=='care-record-v1')throw new ControlError('approval_e2e_profile_unsupported',409);
     const binding=command.reason==='manual_e2e'?scope.bindings.issue:scope.bindings.diff;

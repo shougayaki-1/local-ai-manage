@@ -21,3 +21,8 @@ export function protectedReasons(current:{base?:unknown;worktree:string},execute
 export const operationalReasons: readonly string[];
 export function recoveryState(current:unknown):'automatic_retry_pending'|'human_investigation_required'|null;
 export function parseRecovery(value:unknown):{issue:IssueBinding;diff:DiffBinding};
+
+export type Reevaluation = {requestId:string;issue:IssueBinding;previousIssueDigest:string;diff:DiffBinding|null};
+export function parseReevaluation(value:unknown):Reevaluation;
+
+export function parseReviewBinding(value:unknown):{issue:IssueBinding;diff:DiffBinding|null};

@@ -4,7 +4,7 @@ Issue #5 の固定承認契約です。管理画面の「確認が必要」に�
 
 管理者はGitHubのIssue要件と専用worktreeの差分を別途レビューし、確認したカテゴリの「確認済み範囲を承認」を押します。差分・本文・絶対path・session・raw errorは管理画面へ出しません。承認を保存しても全体／repositoryのPause・Disableは解除しません。managed実行の設定が有効なら、schedulerが同じ保存作業を再選択します。別のcurrentがあるときはそちらを保持し、保留作業の再開はcurrent終了後です。
 
-承認できるカテゴリは `db / auth / permission / tenant / security / retention / manual_e2e` です。その他の停止理由を承認によって解除する操作はありません。たとえばpermissions.tsはdbとpermission、RLS/tenantを含む新規migrationはdb・security・permission・tenantを独立に確認します。既存migration編集、credential、production、deploy、destructive、worktree/sandbox安全性の禁止は維持します。GitHubコメント・ラベル・Codexの自由文・Resume/Enableを承認とは解釈しません。
+承認できるカテゴリは `db / auth / permission / tenant / security / retention / manual_e2e` です。その他の停止理由を承認によって解除する操作はありません。たとえばpermissions.tsはdbとpermission、RLS/tenantを含む新規migrationはdb・security・permission・tenantを独立に確認します。既存migration編集、credential、production、deploy、destructive、worktree/sandbox安全性の禁止は維持します。GitHub自由文コメント・ラベル・Codexの自由文・Resume/Enableを承認とは解釈しません。Issue #8 の current manager request への検証済み 👍 だけは、既存 private grant へ変換します。詳細は [GitHub Issue の承認操作](github-human-review.md)。
 
 ## 固定操作schema
 

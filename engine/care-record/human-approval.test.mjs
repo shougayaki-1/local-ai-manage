@@ -182,3 +182,31 @@ test('full #59 category fixture automatically verifies and resumes after every m
  const state=await f.run({recovery});assert.equal(state.status,'idle');assert.ok(f.calls.some(([b,a])=>b==='npm'&&a.includes('test:ui')));assert.ok(f.calls.some(([b,a])=>b==='node'&&a[0].endsWith('/e2e/run-local.mjs')));
  const saved=JSON.parse(await readFile(join(f.stateDir,'issue-59.json'),'utf8'));assert.equal(saved.session,'saved-session');assert.equal(saved.base,f.base);
 });
+test('specification reaction capability reevaluates the same session and never creates a generic approval',async t=>{
+ const f=await fixture(t,59,true);await f.change('example.txt','implemented\n');f.current.humanReasons=['specification'];f.current.stage='publish';
+ const previousIssueDigest=issueBinding(f.issue).issueDigest;f.issue.body='Canonical decision recorded in Issue body';
+ const reevaluation={requestId:'12345678-1234-4234-8234-123456789abc',previousIssueDigest,issue:issueBinding(f.issue),diff:await diffBinding(f.current,f.execute)};
+ await f.save();let runs=0;
+ const state=await f.run({approval:undefined,reevaluation,reviewBinding:{issue:reevaluation.issue,diff:reevaluation.diff},run:async({current,issue})=>{runs++;assert.equal(current.session,'saved-session');assert.equal(issue.body,f.issue.body);return {code:0,result};}});
+ assert.equal(runs,1);assert.equal(state.status,'idle');const saved=JSON.parse(await readFile(join(f.stateDir,'issue-59.json'),'utf8'));assert.equal(saved.processedSpecificationDigest,reevaluation.issue.issueDigest);assert.equal(saved.session,'saved-session');
+ assert.throws(()=>requireApprovals([],'test--repo','test/repo',59,['specification'],{issue:reevaluation.issue,diff:reevaluation.diff}));
+});
+test('a specification still requiring a decision stops again, preserving session/base and the consumed revision',async t=>{
+ const f=await fixture(t,59,true);await f.change('example.txt','implemented\n');f.current.humanReasons=['specification'];
+ const previousIssueDigest=issueBinding(f.issue).issueDigest;f.issue.body='New but incomplete decision';const reevaluation={requestId:'12345678-1234-4234-8234-123456789abc',previousIssueDigest,issue:issueBinding(f.issue),diff:await diffBinding(f.current,f.execute)};await f.save();
+ const state=await f.run({approval:undefined,reevaluation,run:async()=>({code:0,result:{...result,status:'needs_human',safe_to_open_pr:false,reasons:[{category:'specification',check:'none'}]}})});
+ assert.equal(state.status,'needs-human');assert.equal(state.current.session,'saved-session');assert.equal(state.current.base,f.base);assert.equal(state.current.processedSpecificationDigest,reevaluation.issue.issueDigest);assert.ok(!f.calls.some(([b,a])=>b==='git'&&a[0]==='push'));
+ await f.run({approval:undefined,reevaluation,run:()=>assert.fail('consumed revision replayed')});
+});
+test('current review request binds both Issue revision and diff even when a #5 diff grant remains valid',async t=>{
+ const f=await fixture(t,57,true);await f.change('src/app/auth/page.tsx');f.current.humanReasons=['auth'];await f.approve(['auth']);
+ const reviewBinding={issue:issueBinding(f.issue),diff:await diffBinding(f.current,f.execute)};await f.save();f.issue.body='Changed requirements';
+ const state=await f.run({reviewBinding});assert.equal(state.status,'needs-human');assert.equal(state.current.approvalStatus,'stale');assert.ok(!f.calls.some(([b,a])=>b==='npm'||b==='git'&&a[0]==='push'));
+});
+test('fixed request/reassessment IPC rejects unknown keys, same revision and malicious paths/commands',()=>{
+ const base={version:1,profile:'care-record-v1',repo:'test/repo',clonePath:'/tmp/clone',stateDirectory:'/tmp/state',expectedIssue:59};
+ const issue=issueBinding({body:'decision'}),diff={kind:'diff',base:'a'.repeat(40),head:'a'.repeat(40),diffDigest:'b'.repeat(64)},reevaluation={requestId:'12345678-1234-4234-8234-123456789abc',issue,diff,previousIssueDigest:issueBinding({body:'old'}).issueDigest};
+ assert.deepEqual(parseDispatchDescriptor({...base,reviewBinding:{issue,diff},reevaluation}).reevaluation,reevaluation);
+ for(const value of [{...reevaluation,previousIssueDigest:issue.issueDigest},{...reevaluation,command:'id'},{...reevaluation,diff:{...diff,path:'/secret'}}])assert.throws(()=>parseDispatchDescriptor({...base,reevaluation:value}));
+ for(const value of [{issue,diff,flag:'--dangerously-bypass-approvals-and-sandbox'},{issue,diff:{kind:'issue',issueDigest:issue.issueDigest}}])assert.throws(()=>parseDispatchDescriptor({...base,reviewBinding:value}));
+});
