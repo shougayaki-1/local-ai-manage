@@ -182,3 +182,25 @@ test('full #59 category fixture automatically verifies and resumes after every m
  const state=await f.run({recovery});assert.equal(state.status,'idle');assert.ok(f.calls.some(([b,a])=>b==='npm'&&a.includes('test:ui')));assert.ok(f.calls.some(([b,a])=>b==='node'&&a[0].endsWith('/e2e/run-local.mjs')));
  const saved=JSON.parse(await readFile(join(f.stateDir,'issue-59.json'),'utf8'));assert.equal(saved.session,'saved-session');assert.equal(saved.base,f.base);
 });
+
+async function automatic59(t){
+ const f=await fixture(t,59,true);await f.change('package.json',JSON.stringify({scripts:{...scripts,build:'next build --webpack'}}));await f.change('example.txt','implemented\n');
+ f.current.humanReasons=['db','auth','permission','tenant','manual_e2e','security','retention','local_verification','sandbox_capability'];f.current.stage='implement';f.current.result={...result,status:'needs_human',safe_to_open_pr:false,reasons:[{category:'local_verification',check:'test:ui'},{category:'sandbox_capability',check:'test:ui'}]};
+ const recovery={issue:issueBinding(f.issue),diff:await diffBinding(f.current,f.execute)};await f.save();return {f,recovery};
+}
+test('#59 automatic human categories plus operational blockers verify and resume without creating approvals',async t=>{
+ const {f,recovery}=await automatic59(t);const state=await f.run({approval:undefined,recovery,reviewPolicy:'local-automatic'});assert.equal(state.status,'idle');assert.equal(f.approval.grants.length,0);
+ for(const name of ['typecheck','lint','test:unit','test:ui','build'])assert.ok(f.calls.some(([binary,args])=>binary==='npm'&&args.includes(name)));
+ const local=f.calls.find(([binary,args])=>binary==='node'&&args.includes('--db-tests'));assert.ok(local);const scope=JSON.parse(local[1][2]);assert.equal(scope.projects.length,2);assert.equal(scope.specs.length,11);assert.equal(local[2].timeout,600000);
+ const saved=JSON.parse(await readFile(join(f.stateDir,'issue-59.json'),'utf8'));assert.equal(saved.session,'saved-session');assert.equal(saved.base,f.base);
+});
+test('automatic policy never bypasses actual DB/E2E failure or resets exhausted recovery after restart',async t=>{
+ const {f,recovery}=await automatic59(t);const execute=async(binary,args,options)=>{if(binary==='node')throw new Error('private DB output');return f.execute(binary,args,options);};
+ let state=await f.run({approval:undefined,recovery,reviewPolicy:'local-automatic',execute});assert.equal(state.status,'needs-human');assert.equal(state.current.recoveryStatus,'investigation');assert.ok(!f.calls.some(([binary,args])=>binary==='git'&&args[0]==='push'));
+ state=await f.run({approval:undefined,recovery,reviewPolicy:'local-automatic',run:()=>assert.fail('exhausted restart reran worker')});assert.equal(state.status,'needs-human');
+});
+test('automatic policy remains disabled for manager protected paths, unknown policy, and forbidden categories',async t=>{
+ const {automaticReason}=await import('./lib/human-approval.mjs');for(const reason of ['production','deploy','credential','destructive','specification','external_service','worktree_safety','local_verification'])assert.equal(automaticReason('local-automatic','care-record-v1',reason),false);
+ assert.equal(automaticReason('local-automatic','local-ai-manage-v1','security'),false);assert.equal(automaticReason('manual','care-record-v1','security'),false);
+ const f=await fixture(t);await f.change('src/app/auth/page.tsx');await assert.rejects(verify(f.current,f.execute,'care-record-v1',f.approval,null,'bypass'));
+});

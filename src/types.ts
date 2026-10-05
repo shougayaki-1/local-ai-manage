@@ -1,4 +1,5 @@
 export interface Repository {
+  reviewPolicy?:'manual'|'local-automatic';
   id: string;
   repo: string;
   clonePath: string;
@@ -16,7 +17,7 @@ export interface Job {
   model: string | null; effort: string | null;
   reasonCategories: string[]; check: string | null; prUrl: string | null;
   recovery?: 'automatic_retry_pending'|'human_investigation_required';
-  approvals?: {reason:string;status:'missing'|'approved'|'stale';approvable:boolean}[];
+  approvals?: {reason:string;status:'missing'|'approved'|'stale'|'automatic';approvable:boolean}[];
 }
 export interface RepoSnapshot {
   id: string; repo: string; enabled: boolean; ownership: 'observe-only'|'managed';

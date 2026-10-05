@@ -15,3 +15,5 @@ lib/*.mjsはcodex-runner.mjsのspawn成功通知・profile別prompt、queue.mjs�
 e2e/run-local.mjsとe2e/local-environment.mjsはユーザー所有CareRecordのscripts/e2e working-tree snapshot（2026-10-04）から取得。run-localはrepository rootをmanager固定argsから受け、enum spec/project・retry 0・skip/expected failure拒否・raw output省略へ適応したtrusted artifact。playwright.config.ts.referenceは同snapshotの検証fixtureで、SHA-256は0cfed6fa2a38ed34dc427f470ce8d5efb0782995ed31826ac871c3220e30fb64、local-environment.mjsはa44b17e1cd2ec92ef6b68f1b1a449d1833e03e4feb6d9ad179c8d682a52a66cd。実行時はこのconfig/guardのpinとexact dev scriptを確認し、未レビューのconfig変更は承認でも許可しない。source-manifest.jsonの元worker取得記録は変更しない。
 
 2026-10-05、Issue #7: human grants を維持し、固定 binding の operational recovery descriptor と parent 検証を追加。verification failure の finite repair と永続 investigation、checks の exact profile、sandbox/credential 分離は維持。元source-manifestを改変せず、現artifactの合成回帰で検証。
+
+2026-10-05、Issue #7 制約解消: 元の未commit local-automatic 実装から信頼済み opt-in policy と使い捨て DB/E2E runner の必要部分を確認して移植。元worktree は無変更。並列実行・credential probe・deployment gate解除・追加repair/timeout増加は移植せず、既定manual/#5・manager protected path・固定検証境界を維持。
