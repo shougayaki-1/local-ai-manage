@@ -49,7 +49,7 @@ spec allowlistはauth、workspace-routing、staff-features、tenant-isolation、
 
 対象specとprojectの固定args、`--retries=0 --forbid-only --reporter=json` を構築します。検証結果にskip、retry、expected failure、失敗、ゼロ件があれば成功扱いにしません。既存timeoutを増やしません。Issue本文から実行コマンドを抽出しません。E2E承認はDB/RLS/auth等の差分承認を兼ねません。
 
-本実装の検証は合成Issue・一時Git・モックE2E計画・loopback HTTPを使用し、実E2E、production、GitHubの実変更、稼働中workerの再開は行いません。
+承認契約は合成Issue・一時Git・モックE2E計画・loopback HTTPで検証します。productionと稼働中workerは検証に使いません。
 
 ## Operational recovery (Issue #7)
 
@@ -61,6 +61,8 @@ checks は既存 profile の exact script と hook 契約のみ。Issue本文・
 
 required checks 成功後のみ commit/push/Draft publication に進みます。検証中の差分内容変更も検出します。本当の check failure は既存有限repairへ戻り、失敗回数を保持します。上限到達時は investigation を永続化し、scheduler は同じ失敗作業を無限選択しません。以前の retry-limit state も一度再検証でき、失敗は成功扱いしません。sandbox/network の設定変更、production、credential、destructive、auto merge の許可は追加しません。
 
-検証は合成Git、mock Codex/GitHub、loopback HTTP/IPC。実worker、実E2E、DB適用、稼働反映は実施していません。
+回帰検証は合成Git、mock Codex/GitHub、loopback HTTP/IPCで実施します。追加の隔離検証ではCareRecord mainのコードを専用コピーへ取り出し、使い捨てDBのmigration再構築・全DB tests・isolation tests・generated types照合を通過しました。全固定specのPC/mobile E2Eはretry=0で実行し、既存mobile recoveryテストの画面遷移で失敗しました。E2E成功とは扱わず、productionや稼働中workerへの反映は行っていません。
 
 local-automatic は typecheck/lint/unit/UI/build の exact scripts と固定 allowlist の全 E2E spec・PC/mobile（retry=0）、使い捨て Supabase project の DB tests・generated types・isolation tests を親だけで実施します。config は同梱固定artifactで、migration は既存環境へ適用せず一時環境にコピーします。credentials を渡さず、pin/hook/skip/retry/検証失敗は通過させません。検証前後・commit/publish の Issue/diff binding を維持し、DB/E2E を実行できない場合は investigation に残します。既定 manual のgrant schema・stale・category isolation は変更しません。timeout は既存600秒のままです。
+
+Supabase CLIにも専用SUPABASE_HOMEとcredentialを除いた環境を渡します。固定local configは利用中CLIの互換設定だけを使い、OSのephemeral rangeと隣接portを避けます。cleanup失敗時は一時projectのconfigを保持してinvestigationとし、既存projectの停止・削除へ広げません。
