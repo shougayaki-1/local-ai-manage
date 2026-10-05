@@ -1,5 +1,5 @@
 export const localChecks = ['typecheck', 'lint', 'test', 'test:unit', 'test:ui', 'build', 'test:codex-worker', 'test:ci-scope', 'diff-check'];
-export const reasonCategories = ['sandbox_capability', 'local_verification', 'db', 'auth', 'permission', 'tenant', 'production', 'deploy', 'credential', 'external_service', 'destructive', 'security', 'retention', 'specification', 'manual_e2e', 'worktree_safety'];
+export const reasonCategories = ['sandbox_capability', 'local_verification', 'verification_retry_limit', 'db', 'auth', 'permission', 'tenant', 'production', 'deploy', 'credential', 'external_service', 'destructive', 'security', 'retention', 'specification', 'manual_e2e', 'worktree_safety'];
 
 // Never carry arbitrary output, filenames, assertion values or error messages
 // across the process boundary. Diagnostics are a fixed vocabulary projection.

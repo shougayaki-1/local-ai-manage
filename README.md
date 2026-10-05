@@ -198,3 +198,6 @@ controllerとstatusはログイン時にLaunchAgentで起動します。旧CareR
 並列実行・部分キューの扱いと確認待ちの復旧は [並列実行と停止原因](docs/parallel-execution.md) を参照してください。
 
 DB・認証等のコード差分も先に進める運用では、repositoryごとの `reviewPolicy: "local-automatic"` を指定できる。必要なDB/E2Eを使い捨てローカル環境で自動検証し、成功後にDraft PRへ進む。既定はmanual。詳細は [検証と承認方針](docs/human-approvals.md#ローカル検証の自動化2026-10-05)。
+## GitHub Issue を日常の確認窓口にする
+
+managed controller を `--execute --github` で使用すると、保存 needs-human の Issue に固定 review/status comment を作成・更新する。owner/登録 stable reviewer ID の current request への 👍 を private approval grant に変換し、最後の条件が揃えば追加 Resume なしで保存 session/worktree を再開する。specification は本文決定更新後の再評価のみ、operational blocker は固定 parent verification で処理する。管理画面は補助UIとして保持する。初期 reviewer/E2E scope、stale、API失敗時の安全契約は [GitHub Issue の承認操作](docs/github-human-review.md) を参照。

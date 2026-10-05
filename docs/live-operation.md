@@ -103,3 +103,14 @@ CareRecord #74の停止は、saved baseと同じvercel.jsonに実行branchのfal
 shutdownはschedulerの新規実行を停止してからGitHub observerをabortし、その後drainを待つ順序へ修正した。実controllerでSIGTERM後の自力lock解放とkickstart成功を確認。新しいrevision系で全体・両repoをResumeする。自動検証へ進めるだけのcode-review待ちは人への通知を抑止し、本当の検証失敗は既存通知schemaへ固定projectionして残す。#39の個別復旧は未承認の追加差分についての以前のreview拒否と実検証停止を保持し、一括で解除していない。
 
 最終確認: 新controller revision 3で全体・両repo Enabled/Resumed、全体上限2。#47を保存jobから自動選択しlegacy local probeへ投入したが、成功条件を満たさずautomatic_verification_failedとして保留した。その他の自動対象は独立に再選択する。これは人間承認を足せば成功扱いになる状態ではなく、実検証／環境の失敗を保持するもの。旧controllerの未完了予約を消して再実行したわけではない。
+
+
+## 復旧経路の統合（2026-10-05）
+
+Issue #7/#8 の運用復旧・GitHub確認経路を、現在稼働中の全体2件・repoごと1件のschedulerへ統合した。管理対象profileは、このrepositoryに実在するAGENTS.mdとREADME.md、docs/profiles.md、docs/human-approvals.md、docs/github-human-review.md、docs/parallel-execution.mdを参照する。CareRecord固有のCLAUDE.md/system-decisions.mdを管理アプリのcheckoutへ要求しない。
+
+保存されたcurrentが調査待ちでも、個別に承認・復旧条件を満たしたhumanWaitingの作業はfresh Issue・依存・関連PRを確認して選択できる。退避時には元のsession/base/worktree/failure/alternative履歴を保持する。実検証失敗・retry exhaustionは自動再開対象に戻さない。local-automaticの親検証は、全固定DB/isolation/type/E2E検証を必須とする。旧unit/build理由の変換は実credentialを継承しない独立probeの成功時だけに限定する。
+
+shutdownは受付停止、observer abort、実行中jobとGitHub書込みのdrainの順。registryの同時実行数、保存quota、repoのEnable/Resume、handoffは維持する。先行PRの「稼働並列経路を取り込んでいない」という記録は、そのPR単独時点の検証範囲である。
+
+統合後の管理アプリ・worker全回帰、typecheck、lint、build、diff-checkを実施する。CareRecord #59の保存worktreeでは標準Storybook UI 68件が成功した。独立baselineの使い捨てDBではmigration、SQL、isolation、生成型照合が成功した。E2E復旧シナリオの画面遷移競合はCareRecord側の検証課題として扱い、管理側の検証要件を緩和しない。

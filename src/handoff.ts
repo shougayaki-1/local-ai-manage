@@ -7,7 +7,7 @@ import type { Registry } from './types.ts';
 import type { Handoff } from './worker-adapter.ts';
 export interface HandoffDocument {version:1;registryFingerprint:string;standaloneStopped:true;scope:'all-registered-workers';repositories:{repositoryId:string;profile:WorkerProfile}[]}
 export function registryFingerprint(registry:Registry):string {
- return createHash('sha256').update(JSON.stringify(registry.repositories.map(repo=>[repo.id,repo.repo,repo.clonePath,repo.stateDirectory,repo.enabled,repo.defaultModel,repo.defaultEffort,...(repo.reviewPolicy==='local-automatic'?['local-automatic']:[])]).sort())).digest('hex');
+ return createHash('sha256').update(JSON.stringify(registry.repositories.map(repo=>[repo.id,repo.repo,repo.clonePath,repo.stateDirectory,repo.enabled,repo.defaultModel,repo.defaultEffort,...(repo.canonicalSpecs?[{canonicalSpecs:[...repo.canonicalSpecs].sort()}]:[]),...(repo.reviewPolicy==='local-automatic'?['local-automatic']:[]),...(repo.githubReview?[{reviewerIds:[...repo.githubReview.reviewerIds].sort((a,b)=>a-b),e2e:repo.githubReview.e2e}]:[])]).sort())).digest('hex');
 }
 export function parseHandoff(value:unknown,registry:Registry):Handoff[] {
  const keys=['version','registryFingerprint','standaloneStopped','scope','repositories'];

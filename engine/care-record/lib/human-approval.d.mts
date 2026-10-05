@@ -1,3 +1,4 @@
+import type {CanonicalBinding} from './canonical-spec.mjs';
 export type DiffBinding = {kind:'diff';base:string;head:string;diffDigest:string};
 export type IssueBinding = {kind:'issue';issueDigest:string};
 export type Binding = DiffBinding | IssueBinding;
@@ -18,7 +19,16 @@ export function diffBinding(current:{base?:unknown;worktree:string;branch:string
 export function changedFiles(current:{base?:unknown;worktree:string},execute:(binary:string,args:string[],options?:{cwd?:string})=>Promise<string>):Promise<string[]>;
 export function protectedReasons(current:{base?:unknown;worktree:string},execute:(binary:string,args:string[],options?:{cwd?:string})=>Promise<string>,profile:string):Promise<string[]>;
 
+export const operationalReasons: readonly string[];
+export function recoveryState(current:unknown):'automatic_retry_pending'|'human_investigation_required'|null;
+export function parseRecovery(value:unknown):{issue:IssueBinding;diff:DiffBinding};
+
+export type Reevaluation = {requestId:string;issue:IssueBinding;previousIssueDigest:string;diff:DiffBinding|null;canonical?:CanonicalBinding;previousCanonicalDigest?:string};
+export function parseReevaluation(value:unknown):Reevaluation;
+
+export function parseReviewBinding(value:unknown):{issue:IssueBinding;diff:DiffBinding|null;canonical?:CanonicalBinding};
 export const automaticReviewReasons:readonly string[];
-export function automaticReviewEligible(reasons:string[]):boolean;
+export function automaticReviewEligible(reasons:unknown):boolean;
+export function automaticReason(policy:unknown,profile:unknown,reason:string):boolean;
 
 export function localProbeEligible(current:unknown):boolean;

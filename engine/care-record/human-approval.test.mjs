@@ -8,11 +8,13 @@ import { worker, verify, configuration } from './continuous-worker.mjs';
 import { emptyState, saveJson } from './lib/state.mjs';
 import { diffBinding, issueBinding, requireApprovals, parseGrant, parseE2e, protectedReasons } from './lib/human-approval.mjs';
 import { assertE2ePlan } from './lib/approved-e2e.mjs';
+import { CommandFailure } from './lib/failure.mjs';
+import { recoveryState } from './lib/human-approval.mjs';
 import { parseDispatchDescriptor } from './dispatch-contract.mjs';
 
 const scripts={typecheck:'tsc --noEmit',lint:'eslint',dev:'next dev --webpack','test:unit':'vitest run --project unit','test:ui':'vitest run --project storybook'};
 const result={status:'completed',summary:'Done',tests:[],unrun_tests:'None',security_impact:'Reviewed',remaining_work:'None',safe_to_open_pr:true,reasons:[]};
-async function fixture(t,number=57){
+async function fixture(t,number=57,liveLabels=false){
  const root=await realpath(await mkdtemp(join(tmpdir(),'approval-worker-')));const clone=join(root,'clone'),stateDir=join(root,'state');await mkdir(clone);await mkdir(stateDir,{mode:0o700});
  const git=(args,cwd=clone)=>command('git',args,{cwd});await git(['init','-b','main']);await git(['config','user.name','Test']);await git(['config','user.email','test@example.invalid']);await git(['remote','add','origin','https://github.com/test/repo.git']);
  await mkdir(join(clone,'scripts/e2e'),{recursive:true});await writeFile(join(clone,'playwright.config.ts'),await readFile(new URL('./e2e/playwright.config.ts.reference',import.meta.url)));await writeFile(join(clone,'scripts/e2e/local-environment.mjs'),await readFile(new URL('./e2e/local-environment.mjs',import.meta.url)));
@@ -35,6 +37,7 @@ async function fixture(t,number=57){
     if(endpoint.includes('/pulls?')||endpoint.includes('/timeline?'))return '[[]]';
     return JSON.stringify([[issue]]);
    }
+   if(liveLabels&&args[0]==='issue'&&args[1]==='edit'){for(let i=0;i<args.length;i++){if(args[i]==='--remove-label')issue.labels=issue.labels.filter(label=>label.name!==args[i+1]);if(args[i]==='--add-label'&&!issue.labels.some(label=>label.name===args[i+1]))issue.labels.push({name:args[i+1]});}}
    if(args[0]==='pr'&&args[1]==='list')return '[]';
    if(args[0]==='pr'&&args[1]==='create')return 'https://github.com/test/repo/pull/99';
    return '';
@@ -44,7 +47,7 @@ async function fixture(t,number=57){
  const approval={repositoryId:'test--repo',repo:'test/repo',grants:[],issue:async()=>issue};
  const approve=async(reasons)=>{for(const reason of reasons)approval.grants.push(parseGrant({repositoryId:'test--repo',repo:'test/repo',issue:number,reason,binding:reason==='manual_e2e'?issueBinding(issue):await diffBinding(current,execute),approvedAt:Date.now(),e2e:reason==='manual_e2e'?{specs:['auth'],projects:['chromium','mobile-chrome']}:null}));};
  const save=()=>saveJson(join(stateDir,'state.json'),state);
- const run=(reviewPolicy='manual')=>worker({reviewPolicy,config:{...configuration({}),stateDir,repo:'test/repo'},root:clone,mode:'once',expectedIssue:number,continueAfterHuman:true,approval,execute,report:()=>{},run:()=>assert.fail('Publish-stage resume reran Codex')});
+ const run=(options={})=>worker({config:{...configuration({}),stateDir,repo:'test/repo'},root:clone,mode:'once',expectedIssue:number,continueAfterHuman:true,approval,execute,report:()=>{},run:()=>assert.fail('Publish-stage resume reran Codex'),...options});
  const change=async(name,content='reviewed\n')=>{await mkdir(join(worktree,name,'..'),{recursive:true});await writeFile(join(worktree,name),content);};
  t.after(()=>rm(root,{recursive:true,force:true}));return {root,clone,stateDir,current,state,issue,approval,approve,save,run,change,calls,execute,git,worktree,base};
 }
@@ -139,46 +142,113 @@ test('E2E scope is enum-only and requires pinned local config; no lifecycle hook
  assert.equal(parseDispatchDescriptor(descriptor),descriptor);await f.approve(['manual_e2e']);assert.throws(()=>parseDispatchDescriptor({...descriptor,approval:{...descriptor.approval,grants:[{...f.approval.grants[0],issue:47}]}}));
 });
 
-test('managed publication recovery only clears a proven branch opt-out gate, never reruns Codex',async t=>{
- const f=await fixture(t,74);
- const original={git:{deploymentEnabled:{'codex/other':false}}};
- await writeFile(join(f.clone,'vercel.json'),JSON.stringify(original));await f.git(['add','vercel.json']);await f.git(['commit','-m','synthetic unsuppressed base']);
- const base=await f.git(['rev-parse','HEAD']);await f.git(['update-ref','refs/remotes/origin/main',base]);await f.git(['merge','--ff-only',base],f.current.worktree);f.current.base=base;
- await f.change('example.txt','implementation\n');f.current.preflight={category:'deploy',reason:'branch_deployment_not_disabled'};f.state.lastReason='branch_deployment_not_disabled';await f.save();
- const state=await f.run();assert.equal(state.status,'idle');assert.equal(state.current,null);
- const config=JSON.parse(await readFile(join(f.current.worktree,'vercel.json'),'utf8'));assert.equal(config.git.deploymentEnabled[f.current.branch],false);assert.equal(config.git.deploymentEnabled['codex/other'],false);assert.equal(f.current.session,'saved-session');
- assert.ok(f.calls.some(([binary,args])=>binary==='git'&&args[0]==='push'));
+for (const parked of [false, true]) test(`local verification resumes the saved #59 session without grants, ready label or Resume (parked=${parked})`,async t=>{
+ const f=await fixture(t,59,true);await f.change('example.txt','implementation\n');
+ f.current.stage='implement';f.current.result={...result,status:'needs_human',safe_to_open_pr:false,reasons:[{category:'local_verification',check:'test:ui'},{category:'sandbox_capability',check:'test:ui'}]};
+ const recovery={issue:issueBinding(f.issue),diff:await diffBinding(f.current,f.execute)};
+ if(parked){f.state.humanWaiting=[{current:f.current,reason:'needs_human',since:1}];f.state.current=null;f.state.status='idle';f.state.paused=false;}
+ await f.save();const state=await f.run({approval:undefined,recovery});assert.equal(state.status,'idle');assert.equal(state.current,null);
+ assert.ok(f.calls.some(([binary,args])=>binary==='npm'&&args.includes('test:ui')));
+ const saved=JSON.parse(await readFile(join(f.stateDir,'issue-59.json'),'utf8'));assert.equal(saved.session,'saved-session');assert.equal(saved.base,f.base);
+});
+test('mixed #59 operational and human categories only pass current isolated grants; changed bindings cannot recover',async t=>{
+ const f=await fixture(t,59);await f.change('example.txt','implementation\n');
+ const human=['db','auth','permission','tenant','manual_e2e','security'];f.current.humanReasons=[...human,'local_verification','sandbox_capability'];
+ f.current.result.reasons=[{category:'local_verification',check:'test:ui'},{category:'sandbox_capability',check:'test:ui'}];
+ const recovery={issue:issueBinding(f.issue),diff:await diffBinding(f.current,f.execute)};await f.approve(human.filter(r=>r!=='security'));await f.save();
+ assert.equal((await f.run({recovery})).status,'needs-human');assert.ok(!f.calls.some(([b,a])=>b==='npm'&&a.includes('test:ui')));
+ await f.approve(['security']);await f.change('example.txt','changed\n');await f.save();assert.equal((await f.run({recovery})).status,'needs-human');
+ f.issue.body+='changed';assert.equal((await f.run({recovery})).status,'needs-human');
+});
+test('retry limit is reverified once, never bypassed; exhaustion persists and cannot loop after restart',async t=>{
+ const f=await fixture(t,47);await f.change('example.txt','implementation\n');f.current.failures=1;
+ f.current.humanReasons=['verification_retry_limit','local_verification'];f.current.repair={category:'local_verification',check:'lint',diagnostic:'type_error'};
+ const recovery={issue:issueBinding(f.issue),diff:await diffBinding(f.current,f.execute)};await f.save();
+ const execute=async(b,a,o)=>{if(b==='npm'&&a.includes('lint'))throw new CommandFailure({type:true});return f.execute(b,a,o);};
+ const state=await f.run({approval:undefined,recovery,execute});assert.equal(state.lastReason,'verification_retry_exhausted');assert.equal(state.current.failures,1);assert.equal(recoveryState(state.current),'human_investigation_required');
+ assert.equal((await f.run({approval:undefined,recovery,execute})).status,'needs-human');assert.ok(!f.calls.some(([b,a])=>b==='git'&&a[0]==='push'));
+});
+test('operational recovery descriptor rejects commands, wrong binding kinds and unknown fields',()=>{
+ const base={version:1,profile:'care-record-v1',repo:'test/repo',clonePath:'/tmp/clone',stateDirectory:'/tmp/state',expectedIssue:59};
+ const recovery={issue:issueBinding({body:'safe'}),diff:{kind:'diff',base:'a'.repeat(40),head:'a'.repeat(40),diffDigest:'b'.repeat(64)}};
+ assert.deepEqual(parseDispatchDescriptor({...base,recovery}).recovery,recovery);
+ for(const bad of [{...recovery,command:'echo hacked'}, {...recovery,diff:recovery.issue}, {...recovery,issue:{...recovery.issue,issueDigest:'invalid'}}])assert.throws(()=>parseDispatchDescriptor({...base,recovery:bad}));
 });
 
+test('full #59 category fixture automatically verifies and resumes after every matching private review is present',async t=>{
+ const f=await fixture(t,59,true);await f.change('example.txt','implemented\n');const human=['db','auth','permission','tenant','manual_e2e','security'];
+ f.current.humanReasons=[...human,'local_verification','sandbox_capability'];f.current.stage='implement';f.current.result={...result,status:'needs_human',safe_to_open_pr:false,reasons:[{category:'local_verification',check:'test:ui'},{category:'sandbox_capability',check:'test:ui'}]};
+ await f.approve(human);const recovery={issue:issueBinding(f.issue),diff:await diffBinding(f.current,f.execute)};await f.save();
+ const state=await f.run({recovery});assert.equal(state.status,'idle');assert.ok(f.calls.some(([b,a])=>b==='npm'&&a.includes('test:ui')));assert.ok(f.calls.some(([b,a])=>b==='node'&&a[0].endsWith('/e2e/run-local.mjs')));
+ const saved=JSON.parse(await readFile(join(f.stateDir,'issue-59.json'),'utf8'));assert.equal(saved.session,'saved-session');assert.equal(saved.base,f.base);
+});
+test('specification reaction capability reevaluates the same session and never creates a generic approval',async t=>{
+ const f=await fixture(t,59,true);await f.change('example.txt','implemented\n');f.current.humanReasons=['specification'];f.current.stage='publish';
+ const previousIssueDigest=issueBinding(f.issue).issueDigest;f.issue.body='Canonical decision recorded in Issue body';
+ const reevaluation={requestId:'12345678-1234-4234-8234-123456789abc',previousIssueDigest,issue:issueBinding(f.issue),diff:await diffBinding(f.current,f.execute)};
+ await f.save();let runs=0;
+ const state=await f.run({approval:undefined,reevaluation,reviewBinding:{issue:reevaluation.issue,diff:reevaluation.diff},run:async({current,issue})=>{runs++;assert.equal(current.session,'saved-session');assert.equal(issue.body,f.issue.body);return {code:0,result};}});
+ assert.equal(runs,1);assert.equal(state.status,'idle');const saved=JSON.parse(await readFile(join(f.stateDir,'issue-59.json'),'utf8'));assert.equal(saved.processedSpecificationDigest,reevaluation.issue.issueDigest);assert.equal(saved.session,'saved-session');
+ assert.throws(()=>requireApprovals([],'test--repo','test/repo',59,['specification'],{issue:reevaluation.issue,diff:reevaluation.diff}));
+});
+test('a specification still requiring a decision stops again, preserving session/base and the consumed revision',async t=>{
+ const f=await fixture(t,59,true);await f.change('example.txt','implemented\n');f.current.humanReasons=['specification'];
+ const previousIssueDigest=issueBinding(f.issue).issueDigest;f.issue.body='New but incomplete decision';const reevaluation={requestId:'12345678-1234-4234-8234-123456789abc',previousIssueDigest,issue:issueBinding(f.issue),diff:await diffBinding(f.current,f.execute)};await f.save();
+ const state=await f.run({approval:undefined,reevaluation,run:async()=>({code:0,result:{...result,status:'needs_human',safe_to_open_pr:false,reasons:[{category:'specification',check:'none'}]}})});
+ assert.equal(state.status,'needs-human');assert.equal(state.current.session,'saved-session');assert.equal(state.current.base,f.base);assert.equal(state.current.processedSpecificationDigest,reevaluation.issue.issueDigest);assert.ok(!f.calls.some(([b,a])=>b==='git'&&a[0]==='push'));
+ await f.run({approval:undefined,reevaluation,run:()=>assert.fail('consumed revision replayed')});
+});
+test('current review request binds both Issue revision and diff even when a #5 diff grant remains valid',async t=>{
+ const f=await fixture(t,57,true);await f.change('src/app/auth/page.tsx');f.current.humanReasons=['auth'];await f.approve(['auth']);
+ const reviewBinding={issue:issueBinding(f.issue),diff:await diffBinding(f.current,f.execute)};await f.save();f.issue.body='Changed requirements';
+ const state=await f.run({reviewBinding});assert.equal(state.status,'needs-human');assert.equal(state.current.approvalStatus,'stale');assert.ok(!f.calls.some(([b,a])=>b==='npm'||b==='git'&&a[0]==='push'));
+});
+test('fixed request/reassessment IPC rejects unknown keys, same revision and malicious paths/commands',()=>{
+ const base={version:1,profile:'care-record-v1',repo:'test/repo',clonePath:'/tmp/clone',stateDirectory:'/tmp/state',expectedIssue:59};
+ const issue=issueBinding({body:'decision'}),diff={kind:'diff',base:'a'.repeat(40),head:'a'.repeat(40),diffDigest:'b'.repeat(64)},reevaluation={requestId:'12345678-1234-4234-8234-123456789abc',issue,diff,previousIssueDigest:issueBinding({body:'old'}).issueDigest};
+ assert.deepEqual(parseDispatchDescriptor({...base,reviewBinding:{issue,diff},reevaluation}).reevaluation,reevaluation);
+ for(const value of [{...reevaluation,previousIssueDigest:issue.issueDigest},{...reevaluation,command:'id'},{...reevaluation,diff:{...diff,path:'/secret'}}])assert.throws(()=>parseDispatchDescriptor({...base,reevaluation:value}));
+ for(const value of [{issue,diff,flag:'--dangerously-bypass-approvals-and-sandbox'},{issue,diff:{kind:'issue',issueDigest:issue.issueDigest}}])assert.throws(()=>parseDispatchDescriptor({...base,reviewBinding:value}));
+});
 
-test('opt-in local automatic resumes saved auth changes without per-diff approvals and runs desktop/mobile E2E before Draft',async t=>{
- const f=await fixture(t,57);await f.change('src/app/auth/page.tsx');f.current.humanReasons=['auth'];f.current.result.reasons=[{category:'auth',check:'none'}];await f.save();
- const state=await f.run('local-automatic');assert.equal(state.status,'idle');assert.equal(state.current,null);
- const validation=f.calls.find(([binary,args])=>binary==='node'&&args[0].endsWith('/e2e/run-local.mjs'));
- assert.ok(validation);const scope=JSON.parse(validation[1][2]);assert.deepEqual(scope.projects,['chromium','mobile-chrome']);assert.ok(scope.specs.includes('auth')&&scope.specs.includes('recovery'));
- assert.ok(f.calls.findIndex(([binary])=>binary==='node')<f.calls.findIndex(([binary,args])=>binary==='git'&&args[0]==='push'));
- assert.ok(f.calls.some(([binary,args])=>binary==='gh'&&args.includes('--draft')));assert.equal(f.approval.grants.length,0);
+async function automatic59(t){
+ const f=await fixture(t,59,true);await f.change('package.json',JSON.stringify({scripts:{...scripts,build:'next build --webpack'}}));await f.change('example.txt','implemented\n');
+ f.current.humanReasons=['db','auth','permission','tenant','manual_e2e','security','retention','local_verification','sandbox_capability'];f.current.stage='implement';f.current.result={...result,status:'needs_human',safe_to_open_pr:false,reasons:[{category:'local_verification',check:'test:ui'},{category:'sandbox_capability',check:'test:ui'}]};
+ const recovery={issue:issueBinding(f.issue),diff:await diffBinding(f.current,f.execute)};await f.save();return {f,recovery};
+}
+test('#59 automatic human categories plus operational blockers verify and resume without creating approvals',async t=>{
+ const {f,recovery}=await automatic59(t);const state=await f.run({approval:undefined,recovery,reviewPolicy:'local-automatic'});assert.equal(state.status,'idle');assert.equal(f.approval.grants.length,0);
+ for(const name of ['typecheck','lint','test:unit','test:ui','build'])assert.ok(f.calls.some(([binary,args])=>binary==='npm'&&args.includes(name)));
+ const local=f.calls.find(([binary,args])=>binary==='node'&&args.includes('--db-tests'));assert.ok(local);const scope=JSON.parse(local[1][2]);assert.equal(scope.projects.length,2);assert.equal(scope.specs.length,11);assert.equal(local[2].timeout,600000);
+ const saved=JSON.parse(await readFile(join(f.stateDir,'issue-59.json'),'utf8'));assert.equal(saved.session,'saved-session');assert.equal(saved.base,f.base);
 });
-test('automatic DB validation is mandatory before commit; failure retains job and cannot auto-resume',async t=>{
- const f=await fixture(t,47);await f.change('supabase/migrations/20261004_test.sql','CREATE POLICY records ON records USING (tenant_id = 1);\n');f.current.humanReasons=['db','permission','tenant','security'];await f.save();
- const execute=async(binary,args,options)=>{if(binary==='node'&&args[0].endsWith('/e2e/run-local.mjs')){assert.ok(args.includes('--db-tests'));throw new Error('DB assertion failed');}return f.execute(binary,args,options);};
- const opts={config:{...configuration({}),stateDir:f.stateDir,repo:'test/repo'},root:f.clone,mode:'once',expectedIssue:47,continueAfterHuman:true,reviewPolicy:'local-automatic',execute,report:()=>{}};
- const state=await worker(opts);assert.equal(state.status,'needs-human');assert.equal(state.lastReason,'automatic_verification_failed');assert.equal(state.current.session,'saved-session');assert.ok(!f.calls.some(([binary,args])=>binary==='git'&&args[0]==='push'));
- const before=f.calls.filter(([binary])=>binary==='node').length;await worker(opts);assert.equal(f.calls.filter(([binary])=>binary==='node').length,before);
+test('automatic policy never bypasses actual DB/E2E failure or resets exhausted recovery after restart',async t=>{
+ const {f,recovery}=await automatic59(t);const execute=async(binary,args,options)=>{if(binary==='node')throw new Error('private DB output');return f.execute(binary,args,options);};
+ let state=await f.run({approval:undefined,recovery,reviewPolicy:'local-automatic',execute});assert.equal(state.status,'needs-human');assert.equal(state.current.recoveryStatus,'investigation');assert.ok(!f.calls.some(([binary,args])=>binary==='git'&&args[0]==='push'));
+ state=await f.run({approval:undefined,recovery,reviewPolicy:'local-automatic',run:()=>assert.fail('exhausted restart reran worker')});assert.equal(state.status,'needs-human');
 });
-test('automatic policy never grants production, credential, destructive or unsupported local script gates',async t=>{
- const f=await fixture(t);await f.change('example.txt');for(const category of ['production','credential','destructive','external_service','deploy','specification']){
- f.current.result.reasons=[{category,check:'none'}];await assert.rejects(verify(f.current,f.execute,'care-record-v1',undefined,false,'local-automatic'),error=>error.reasons?.includes(category));}
- f.current.result.reasons=[];await f.change('src/app/auth/page.tsx');await writeFile(join(f.worktree,'package.json'),JSON.stringify({scripts:{...scripts,'pretest:unit':'echo unsafe'}}));await assert.rejects(verify(f.current,f.execute,'care-record-v1',undefined,false,'local-automatic'));
+test('automatic policy remains disabled for manager protected paths, unknown policy, and forbidden categories',async t=>{
+ const {automaticReason}=await import('./lib/human-approval.mjs');for(const reason of ['production','deploy','credential','destructive','specification','external_service','worktree_safety','local_verification'])assert.equal(automaticReason('local-automatic','care-record-v1',reason),false);
+ assert.equal(automaticReason('local-automatic','local-ai-manage-v1','security'),false);assert.equal(automaticReason('manual','care-record-v1','security'),false);
+ const f=await fixture(t);await f.change('src/app/auth/page.tsx');await assert.rejects(verify(f.current,f.execute,'care-record-v1',f.approval,null,'bypass'));
+});
+
+test('canonical-only specification change reevaluates current GitHub content in the same saved session; replay is rejected',async t=>{
+ const {canonicalSpec}=await import('./lib/canonical-spec.mjs');const {createHash}=await import('node:crypto');const f=await fixture(t,59,true);await f.change('example.txt','implemented\n');f.current.humanReasons=['specification'];
+ const content='Owner canonical decision',sha=createHash('sha1').update(`blob ${Buffer.byteLength(content)}\0`).update(content).digest('hex');
+ const read=async path=>path==='commits?per_page=1'?[{sha:'c'.repeat(40),commit:{tree:{sha:'a'.repeat(40)}}}]:path==='git/trees/'+'a'.repeat(40)?{sha:'a'.repeat(40),truncated:false,tree:[{path:'docs',type:'tree',mode:'040000',sha:'b'.repeat(40)}]}:path==='git/trees/'+'b'.repeat(40)?{sha:'b'.repeat(40),truncated:false,tree:[{path:'system-decisions.md',type:'blob',mode:'100644',sha}]}:{sha,encoding:'base64',size:Buffer.byteLength(content),content:Buffer.from(content).toString('base64')};
+ const canonical=(await canonicalSpec(['docs/system-decisions.md'],read)).binding;const issue=issueBinding(f.issue),diff=await diffBinding(f.current,f.execute);const reevaluation={requestId:'12345678-1234-4234-8234-123456789abc',previousIssueDigest:issue.issueDigest,issue,diff,canonical,previousCanonicalDigest:'d'.repeat(64)};
+ const execute=async(binary,args,options)=>binary==='gh'&&args[0]==='api'&&/\/(?:commits\?|git\/)/.test(args.at(-1))?JSON.stringify(await read(args.at(-1).slice('repos/test/repo/'.length))):f.execute(binary,args,options);
+ await f.save();let ran=0;const state=await f.run({approval:undefined,reevaluation,reviewBinding:{issue,diff,canonical},execute,run:async({current,canonicalFiles})=>{ran++;assert.equal(current.session,'saved-session');assert.equal(canonicalFiles[0].content,content);return {code:0,result:{...result,status:'needs_human',safe_to_open_pr:false,reasons:[{category:'specification',check:'none'}]}};}});
+ assert.equal(ran,1);assert.equal(state.status,'needs-human');assert.equal(state.current.processedSpecificationRequestId,reevaluation.requestId);
+ await f.run({approval:undefined,reevaluation,reviewBinding:{issue,diff,canonical},execute,run:()=>assert.fail('canonical revision replayed')});
  assert.ok(!f.calls.some(([binary,args])=>binary==='git'&&args[0]==='push'));
 });
 
-
-test('legacy unit credential label is resolved only by successful isolated check, never an actual credential operation',async t=>{
- const f=await fixture(t);await f.change('src/app/auth/page.tsx');f.current.humanReasons=['auth'];f.current.result.reasons=[{category:'auth',check:'none'},{category:'credential',check:'test:unit'}];await f.save();
- const state=await f.run('local-automatic');assert.equal(state.status,'idle');assert.ok(f.calls.some(([binary,args,options])=>binary==='npm'&&args[1]==='test:unit'&&options.testMode));assert.ok(f.calls.some(([binary,args])=>binary==='git'&&args[0]==='push'));
-});
-test('automatic verification cannot overlook changed file contents with identical git status',async t=>{
- const f=await fixture(t);await f.change('src/app/auth/page.tsx');const execute=async(binary,args,options)=>{if(binary==='node')await writeFile(join(f.worktree,'src/app/auth/page.tsx'),'altered by check\n');return f.execute(binary,args,options);};
- await assert.rejects(verify(f.current,execute,'care-record-v1',undefined,false,'local-automatic'),error=>error.reason==='verification_changed_worktree');assert.equal(await f.git(['rev-parse','HEAD'],f.worktree),f.base);
+test('verified parked recovery preserves a different current human stop with its saved session',async t=>{
+ const f=await fixture(t,59,true);await f.change('example.txt','implementation\n');f.current.result.reasons=[{category:'local_verification',check:'test:ui'}];
+ const recovery={issue:issueBinding(f.issue),diff:await diffBinding(f.current,f.execute)};
+ const stopped={...f.current,number:58,branch:'codex/issue-58-preserved',worktree:join(f.stateDir,'worktrees','issue-58'),session:'other-saved-session'};
+ f.state.humanWaiting=[{current:f.current,reason:'needs_human',since:1}];f.state.current=stopped;f.state.status='needs-human';f.state.paused=true;await f.save();
+ const state=await f.run({approval:undefined,recovery});assert.equal(state.status,'idle');assert.equal(state.current,null);assert.deepEqual(state.humanWaiting,[{current:stopped,reason:'needs_human',since:state.humanWaiting[0].since}]);assert.equal(state.humanWaiting[0].current.session,'other-saved-session');
 });

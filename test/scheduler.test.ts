@@ -149,6 +149,15 @@ test('approved parked jobs keep manual worker pause and active current precedenc
  repo.current=null;f.clock.now+=30000;await scheduler.tick();await scheduler.settled();assert.deepEqual(calls,[58,48]);
 });
 
+test('operational retry is scheduled without a ready queue or manual Resume; investigation and missing/stale human reviews block',async t=>{
+ const f=await fixture();f.snapshot.queue.items=[];f.snapshot.queue.repositories.forEach(q=>q.items=[]);
+ const repo=f.snapshot.repositories[0]!;repo.status='needs-human';repo.paused=true;repo.current={issue:59,stage:'implement',failures:0,quotaWaits:0,model:null,effort:null,reasonCategories:['local_verification','sandbox_capability','db','auth','permission','tenant','manual_e2e','security'],check:'test:ui',prUrl:null,recovery:'automatic_retry_pending',approvals:['db','auth','permission','tenant','manual_e2e','security'].map(reason=>({reason,status:'approved',approvable:true}))};
+ let count=0;const scheduler=await Scheduler.create({...f,snapshot:async()=>f.snapshot,now:()=>f.clock.now,dispatch:async(_id,issue)=>{count++;return outcome(issue);}});
+ t.after(async()=>{await scheduler.close();await f.controller.close();await rm(f.root,{recursive:true,force:true});});
+ await f.resume();repo.current.approvals![0]!.status='stale';await scheduler.tick();assert.equal(count,0);
+ repo.current.approvals![0]!.status='approved';repo.current.recovery='human_investigation_required';await scheduler.tick();assert.equal(count,0);
+ repo.current.recovery='automatic_retry_pending';await scheduler.tick();await scheduler.settled();assert.equal(count,1);
+});
 
 test('independent repositories overlap, keep one job per repo and drain all slots',async t=>{
  const f=await fixture();f.registry.globalConcurrency=2;
@@ -191,7 +200,7 @@ test('mechanical branch suppression stop retries publication; other deploy gates
 
 test('local automatic policy selects saved code review jobs but never failed verification or production stops',async t=>{
  const f=await fixture();f.registry.repositories[0]!.reviewPolicy='local-automatic';f.snapshot.repositories[0]!.status='needs-human';f.snapshot.repositories[0]!.paused=true;
- f.snapshot.repositories[0]!.current={issue:47,stage:'implement',failures:0,quotaWaits:0,model:null,effort:null,reasonCategories:['db','permission','security'],check:null,prUrl:null};
+ f.snapshot.repositories[0]!.current={issue:47,stage:'implement',failures:0,quotaWaits:0,model:null,effort:null,reasonCategories:['db','permission','security'],approvals:['db','permission','security'].map(reason=>({reason,status:'automatic' as const,approvable:false})),check:null,prUrl:null};
  const calls:number[]=[];const scheduler=await Scheduler.create({...f,snapshot:async()=>f.snapshot,now:()=>f.clock.now,dispatch:async(_id,issue)=>{calls.push(issue);return outcome(issue);}});
  t.after(async()=>{await scheduler.close();await f.controller.close();await rm(f.root,{recursive:true,force:true});});await f.resume();await scheduler.tick();await scheduler.settled();assert.equal(calls[0],47);
  f.clock.now+=30000;f.snapshot.repositories[0]!.reason='automatic_verification_failed';f.snapshot.queue.repositories.forEach(queue=>{queue.items=[];});await f.controller.apply(f.request('example--b','disable'));await scheduler.tick();assert.equal(calls.length,1);
@@ -204,4 +213,11 @@ test('shutdown cancels an in-flight GitHub observation before awaiting scheduler
  const scheduler=await Scheduler.create({...f,snapshot:()=>new Promise<Snapshot>((_resolve,reject)=>{observed=true;abort.signal.addEventListener('abort',()=>reject(new Error('stopped')),{once:true});}),now:()=>f.clock.now,dispatch:async(_id,issue)=>{dispatched=true;return outcome(issue);}});
  t.after(async()=>{abort.abort();await scheduler.close();await f.controller.close();await rm(f.root,{recursive:true,force:true});});await f.resume();void scheduler.tick();assert.equal(observed,true);
  const drained=drainDispatch(scheduler,{close:()=>abort.abort()});await Promise.race([drained,new Promise((_,reject)=>setTimeout(()=>reject(new Error('drain hung')),500))]);assert.equal(dispatched,false);await f.controller.close();await assert.rejects(readFile(join(f.root,'controller/controller.lock')),error=>(error as NodeJS.ErrnoException).code==='ENOENT');
+});
+
+test('a reviewed parked job is selected while the current job needs investigation',async t=>{
+ const f=await fixture();const repo=f.snapshot.repositories[0]!;repo.status='needs-human';repo.paused=true;repo.reason='automatic_verification_failed';repo.current={issue:59,stage:'implement',failures:3,quotaWaits:0,model:null,effort:null,reasonCategories:['local_verification'],recovery:'human_investigation_required',check:'test:ui',prUrl:null};
+ repo.humanWaiting=[{job:{issue:47,stage:'publish',failures:0,quotaWaits:0,model:null,effort:null,reasonCategories:['db'],approvals:[{reason:'db',status:'approved',approvable:true}],check:null,prUrl:null},reason:'needs_human',since:new Date(0).toISOString()}];
+ const calls:number[]=[];const scheduler=await Scheduler.create({...f,snapshot:async()=>f.snapshot,now:()=>f.clock.now,dispatch:async(_id,issue)=>{calls.push(issue);return outcome(issue);}});
+ t.after(async()=>{await scheduler.close();await f.controller.close();await rm(f.root,{recursive:true,force:true});});await f.resume();await scheduler.tick();await scheduler.settled();assert.deepEqual(calls,[47]);assert.equal(repo.current.issue,59);
 });

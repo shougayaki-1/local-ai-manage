@@ -30,7 +30,7 @@ export async function runApprovedE2e(current, scripts, profile, scope, execute) 
     { cwd: current.worktree, timeout: 600_000, testMode: true });
 }
 
-export async function runAutomaticLocal(current,scripts,profile,scope,execute,{db=false}={}){
+export async function runAutomaticLocal(current,scripts,profile,scope,execute){
  await assertE2ePlan(current.worktree,scripts,profile,scope);
- await execute('node',[fileURLToPath(new URL('../e2e/run-local.mjs',import.meta.url)),current.worktree,JSON.stringify(parseE2e(scope)),...(db?['--db-tests']:[])],{cwd:current.worktree,timeout:1_800_000,testMode:true});
+ await execute('node',[fileURLToPath(new URL('../e2e/run-local.mjs',import.meta.url)),current.worktree,JSON.stringify(parseE2e(scope)),'--db-tests'],{cwd:current.worktree,timeout:600_000,testMode:true});
 }

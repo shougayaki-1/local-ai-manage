@@ -1,4 +1,4 @@
-import { localProbeEligible } from './approval-policy.ts';
+import { localProbeEligible, recoveryState } from './approval-policy.ts';
 import { open, realpath, opendir } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join } from 'node:path';
@@ -8,7 +8,7 @@ import { record } from './registry.ts';
 import type { Job, Repository, RepoSnapshot, Registry, Snapshot } from './types.ts';
 const statuses=['idle','running','quota-wait','needs-human','failed'];
 const stages=['prepare','implement','publish'];
-const categories=['sandbox_capability','local_verification','db','auth','permission','tenant','production','deploy','credential','external_service','destructive','security','retention','specification','manual_e2e','worktree_safety'];
+const categories=['sandbox_capability','local_verification','verification_retry_limit','db','auth','permission','tenant','production','deploy','credential','external_service','destructive','security','retention','specification','manual_e2e','worktree_safety'];
 const reasons=['automatic_verification_failed','running','completed','stopped','paused','needs_human','quota_wait','manual_e2e_required','human_approval_required','parent_verification_retry','verification_retry_exhausted','unsafe_or_unavailable_verification','parent_verification_safety_failed','publication_failed','operational_error','stale_existing_worktree','worktree_base_mismatch','branch_deployment_not_disabled','worktree_branch_mismatch','missing_saved_worktree','repair_session_resume_unavailable','repair_session_mismatch'];
 const checks=['local_db_e2e','typecheck','lint','test','test:unit','test:ui','build','test:codex-worker','test:ci-scope','diff-check'];
 const count=(v: unknown): number|null => Number.isSafeInteger(v) && (v as number)>=0 ? v as number : null;
@@ -27,7 +27,7 @@ export function projectJob(value: unknown, repo: string): Job|null {
   const supplied=Array.isArray(result.reasons) ? result.reasons : [];
   const all=[...supplied,repair,preflight,...(Array.isArray(value.humanReasons)?value.humanReasons.map(category=>({category})):[])].filter(record).map(v=>v.category).filter((v): v is string => typeof v==='string' && categories.includes(v));
   const check=[repair.check,...supplied.filter(record).map(reason=>reason.check)].find(value=>checks.includes(String(value)));
-  return {localProbeEligible:localProbeEligible(value),issue:value.number,stage:stages.includes(String(value.stage)) ? value.stage as Job['stage'] : 'unknown',failures:count(value.failures),quotaWaits:count(value.quotaWaits),model:null,effort:null,reasonCategories:[...new Set(all)],check:check===undefined?null:String(check),prUrl:prUrl(value.pr,repo)};
+  return {localProbeEligible:localProbeEligible(value),...(recoveryState(value)?{recovery:recoveryState(value)!}:{}),issue:value.number,stage:stages.includes(String(value.stage)) ? value.stage as Job['stage'] : 'unknown',failures:count(value.failures),quotaWaits:count(value.quotaWaits),model:null,effort:null,reasonCategories:[...new Set(all)],check:check===undefined?null:String(check),prUrl:prUrl(value.pr,repo)};
 }
 export function projectState(raw: unknown, repo: Repository, updatedAt: number, now: number): RepoSnapshot {
   if (!record(raw) || raw.version!==1 || raw.repo?.toString().toLowerCase()!==repo.repo.toLowerCase() || !statuses.includes(String(raw.status)) || typeof raw.paused!=='boolean' || (raw.current!==null && (!record(raw.current) || !issue(raw.current.number) || !stages.includes(String(raw.current.stage))))) throw new Error('invalid_state');

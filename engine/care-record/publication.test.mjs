@@ -38,7 +38,7 @@ import { prepareSuppressedDeployment } from './lib/publication.mjs';
 test('managed parent adds only current branch suppression before verification and preserves saved work',async t=>{
  const config={headers:[],git:{deploymentEnabled:{'codex/other':false}}};const f=await fixture(t,config);
  f.current.preflight={category:'deploy',reason:'branch_deployment_not_disabled'};
- await verify(f.current,f.execute,'care-record-v1',undefined,true);
+ await verify(f.current,f.execute,'care-record-v1',undefined,null,'manual',true);
  const saved=JSON.parse(await import('node:fs/promises').then(fs=>fs.readFile(join(f.current.worktree,'vercel.json'),'utf8')));
  assert.ok(branchSuppressionOnly(config,saved,f.current.branch));assert.equal(f.current.preflight,undefined);assert.equal(f.current.session,'SAVED_SESSION');assert.equal(f.current.failures,0);assert.equal(f.checks(),2);
 });

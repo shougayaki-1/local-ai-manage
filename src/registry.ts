@@ -1,3 +1,5 @@
+import {parseCanonicalPaths} from './canonical-spec.ts';
+import { parseE2e } from './approval-policy.ts';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, sep, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -5,7 +7,7 @@ import { promisify } from 'node:util';
 import type { Registry, Repository } from './types.ts';
 const execute = promisify(execFile);
 const repoPattern = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/;
-const keys = ['id','repo','clonePath','stateDirectory','enabled','ownership','defaultModel','defaultEffort','maximumConcurrency','reviewPolicy'];
+const keys = ['id','repo','clonePath','stateDirectory','enabled','ownership','defaultModel','defaultEffort','maximumConcurrency','githubReview','reviewPolicy','canonicalSpecs'];
 export const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const inside = (root: string, child: string) => { const p=relative(root,child); return p === '' || (!p.startsWith(`..${sep}`) && p !== '..' && !isAbsolute(p)); };
 export function parseRegistry(value: unknown): Registry {
@@ -13,6 +15,12 @@ export function parseRegistry(value: unknown): Registry {
   const ids=new Set<string>(); const repos=new Set<string>();
   const repositories = value.repositories.map((item): Repository => {
     if (!record(item) || Object.keys(item).some(k=>!keys.includes(k)) || typeof item.repo!=='string' || !repoPattern.test(item.repo) || item.repo.split('/').some(s=>s==='.'||s==='..') || item.id!==item.repo.toLowerCase().replace('/','--') || ids.has(String(item.id)) || repos.has(item.repo.toLowerCase()) || typeof item.enabled!=='boolean' || item.ownership!=='observe-only' || item.maximumConcurrency!==1 || (item.reviewPolicy!==undefined&&!['manual','local-automatic'].includes(String(item.reviewPolicy))) || item.defaultModel!=='gpt-6.1-sol' || !['low','medium','high','xhigh'].includes(String(item.defaultEffort)) || typeof item.clonePath!=='string' || !isAbsolute(item.clonePath) || typeof item.stateDirectory!=='string' || !isAbsolute(item.stateDirectory)) throw new Error('invalid_repository');
+    if(item.githubReview!==undefined){
+      const review=item.githubReview;
+      if(!record(review)||Object.keys(review).length!==2||!Object.hasOwn(review,'reviewerIds')||!Object.hasOwn(review,'e2e')||!Array.isArray(review.reviewerIds)||review.reviewerIds.length>32||review.reviewerIds.some(id=>!Number.isSafeInteger(id)||id<=0)||new Set(review.reviewerIds).size!==review.reviewerIds.length)throw new Error('invalid_github_review');
+      if(review.e2e!==null)parseE2e(review.e2e);
+    }
+    if(item.canonicalSpecs!==undefined)parseCanonicalPaths(item.canonicalSpecs);
     ids.add(String(item.id)); repos.add(item.repo.toLowerCase());
     return item as unknown as Repository;
   });

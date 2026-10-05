@@ -4,7 +4,7 @@
 
 管理者はGitHubのIssue要件と専用worktreeの差分を別途レビューし、確認したカテゴリの「確認済み範囲を承認」を押します。差分・本文・絶対path・session・raw errorは管理画面へ出しません。承認を保存しても全体／repositoryのPause・Disableは解除しません。managed実行の設定が有効なら、schedulerが同じ保存作業を再選択します。別のcurrentがあるときはそちらを保持し、保留作業の再開はcurrent終了後です。
 
-承認できるカテゴリは `db / auth / permission / tenant / security / retention / manual_e2e` です。その他の停止理由を承認によって解除する操作はありません。たとえばpermissions.tsはdbとpermission、RLS/tenantを含む新規migrationはdb・security・permission・tenantを独立に確認します。既存migration編集、credential、production、deploy、destructive、worktree/sandbox安全性の禁止は維持します。GitHubコメント・ラベル・Codexの自由文・Resume/Enableを承認とは解釈しません。
+承認できるカテゴリは `db / auth / permission / tenant / security / retention / manual_e2e` です。その他の停止理由を承認によって解除する操作はありません。たとえばpermissions.tsはdbとpermission、RLS/tenantを含む新規migrationはdb・security・permission・tenantを独立に確認します。既存migration編集、credential、production、deploy、destructive、worktree/sandbox安全性の禁止は維持します。GitHub自由文コメント・ラベル・Codexの自由文・Resume/Enableを承認とは解釈しません。Issue #8 の current manager request への検証済み 👍 だけは、既存 private grant へ変換します。詳細は [GitHub Issue の承認操作](github-human-review.md)。
 
 ## 固定操作schema
 
@@ -67,3 +67,20 @@ registryのrepositoryに `"reviewPolicy": "local-automatic"` を指定すると�
 旧workerがunitの合成設定をcredential、公開build asset取得をexternal_serviceと報告した場合は、当該固定scriptをcredential分離環境で実際に成功させた場合だけ、その検証項目の停止理由を解消する。失敗・差分変更・環境ファイル存在・他のcredential/external理由は解除しない。
 
 停止時は新規dispatchを止め、GitHub観測をキャンセルしてからscheduler drainを待つ。自動対象のカテゴリだけで待っている間は、人への確認通知を送らない。実検証の有限repair失敗は通知対象として残る。
+承認契約は合成Issue・一時Git・モックE2E計画・loopback HTTPで検証します。productionと稼働中workerは検証に使いません。
+
+## Operational recovery (Issue #7)
+
+`local_verification / sandbox_capability / verification_retry_limit` は承認対象ではありません。承認一覧には表示せず、`automatic_retry_pending`（自動復旧中）または `human_investigation_required` を独立表示します。非承認カテゴリは private grant に変換できません。
+
+manager は saved Issue・base・HEAD・有効な差分digestを照合した固定 recovery descriptor を bounded bridge に渡します。worker は fresh Issue、dependency、関連PR、worktree/branch/profile と binding を再検証し、同じsession/worktreeを保持して parent verification を実施します。Issue の ready 再付与、Resume、queue 再投入は不要です。global/repository の Pause/Disable、quota、未知の実行完了は解除しません。
+
+checks は既存 profile の exact script と hook 契約のみ。Issue本文・コメント・raw error から command/path/flag を生成しません。既定の manual では混在する human categories に #5 の matching grants が引き続き必要です。信頼済み registry の明示的な `reviewPolicy: local-automatic` は care-record-v1 のコードレビューだけを Draft PR のレビューへ延期します。Issue・コメント・ラベル・Codex出力から設定できず、handoff fingerprint と固定 IPC へ束縛します。manager 自身の security guard、specification、production/deploy/credential/external_service/destructive/worktree safety は対象外です。#59 回帰は manual private grants と、全 human categories が automatic で operational recovery だけが残る両方を検証します。
+
+required checks 成功後のみ commit/push/Draft publication に進みます。検証中の差分内容変更も検出します。本当の check failure は既存有限repairへ戻り、失敗回数を保持します。上限到達時は investigation を永続化し、scheduler は同じ失敗作業を無限選択しません。以前の retry-limit state も一度再検証でき、失敗は成功扱いしません。sandbox/network の設定変更、production、credential、destructive、auto merge の許可は追加しません。
+
+回帰検証は合成Git、mock Codex/GitHub、loopback HTTP/IPCで実施します。追加の隔離検証ではCareRecord mainのコードを専用コピーへ取り出し、使い捨てDBのmigration再構築・全DB tests・isolation tests・generated types照合を通過しました。全固定specのPC/mobile E2Eはretry=0で実行し、既存mobile recoveryテストの画面遷移で失敗しました。E2E成功とは扱わず、productionや稼働中workerへの反映は行っていません。
+
+local-automatic は typecheck/lint/unit/UI/build の exact scripts と固定 allowlist の全 E2E spec・PC/mobile（retry=0）、使い捨て Supabase project の DB tests・generated types・isolation tests を親だけで実施します。config は同梱固定artifactで、migration は既存環境へ適用せず一時環境にコピーします。credentials を渡さず、pin/hook/skip/retry/検証失敗は通過させません。検証前後・commit/publish の Issue/diff binding を維持し、DB/E2E を実行できない場合は investigation に残します。既定 manual のgrant schema・stale・category isolation は変更しません。timeout は既存600秒のままです。
+
+Supabase CLIにも専用SUPABASE_HOMEとcredentialを除いた環境を渡します。固定local configは利用中CLIの互換設定だけを使い、OSのephemeral rangeと隣接portを避けます。cleanup失敗時は一時projectのconfigを保持してinvestigationとし、既存projectの停止・削除へ広げません。

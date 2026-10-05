@@ -9,6 +9,9 @@ function validCurrent(current) {
     && /^codex\/issue-\d+-[a-z0-9-]+$/.test(current.branch ?? '') && current.branch.startsWith(`codex/issue-${current.number}-`)
     && typeof current.worktree === 'string' && Number.isInteger(current.failures) && current.failures >= 0
     && Number.isInteger(current.quotaWaits) && current.quotaWaits >= 0 && ['prepare', 'implement', 'publish'].includes(current.stage)
+    && (current.processedSpecificationRequestId===undefined||typeof current.processedSpecificationRequestId==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(current.processedSpecificationRequestId))
+    && (current.processedSpecificationDigest === undefined || typeof current.processedSpecificationDigest === 'string' && /^[a-f0-9]{64}$/.test(current.processedSpecificationDigest))
+    && (current.recoveryStatus === undefined || current.recoveryStatus === 'investigation')
     && (current.repair === undefined || repairDiagnostic(current.repair))
     && (current.alternativeHistory === undefined || (Array.isArray(current.alternativeHistory)
       && current.alternativeHistory.length <= 2 && current.alternativeHistory.every(entry => repairDiagnostic(entry))))

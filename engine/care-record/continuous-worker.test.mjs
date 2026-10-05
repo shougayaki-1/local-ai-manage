@@ -876,7 +876,10 @@ for (const succeeds of [true, false]) test(`automatic alternative implementation
       if (b === 'git' && a[0] === 'diff' && a.includes('-z')) return 'A\0scripts/example.mjs\0';
       if (b === 'git' && a[0] === 'worktree' && a[1] === 'add') {
         const value = await f.execute(b, a, o);
-        await mkdir(join(a[4], 'scripts'));
+        await mkdir(join(a[4], 'scripts/e2e'),{recursive:true});
+        await writeFile(join(a[4], 'playwright.config.ts'),await readFile(new URL('./e2e/playwright.config.ts.reference',import.meta.url)));
+        await writeFile(join(a[4], 'scripts/e2e/local-environment.mjs'),await readFile(new URL('./e2e/local-environment.mjs',import.meta.url)));
+        await writeFile(join(a[4], 'package.json'),JSON.stringify({scripts:{...localScripts,dev:'next dev --webpack'}}));
         await writeFile(join(a[4], 'scripts/example.mjs'), 'export const example = true;');
         return value;
       }
@@ -939,7 +942,10 @@ test('alternative history survives quota without consuming another attempt', asy
       if (b === 'git' && a[0] === 'diff' && a.includes('-z')) return 'A\0scripts/example.mjs\0';
       if (b === 'git' && a[0] === 'worktree' && a[1] === 'add') {
         const value = await f.execute(b,a,o);
-        await mkdir(join(a[4], 'scripts'));
+        await mkdir(join(a[4], 'scripts/e2e'),{recursive:true});
+        await writeFile(join(a[4], 'playwright.config.ts'),await readFile(new URL('./e2e/playwright.config.ts.reference',import.meta.url)));
+        await writeFile(join(a[4], 'scripts/e2e/local-environment.mjs'),await readFile(new URL('./e2e/local-environment.mjs',import.meta.url)));
+        await writeFile(join(a[4], 'package.json'),JSON.stringify({scripts:{...localScripts,dev:'next dev --webpack'}}));
         await writeFile(join(a[4], 'scripts/example.mjs'), 'export const example = true;');
         return value;
       }

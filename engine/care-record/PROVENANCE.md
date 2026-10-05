@@ -19,3 +19,9 @@ e2e/run-local.mjsとe2e/local-environment.mjsはユーザー所有CareRecordのs
 2026-10-04、scope承認済みhumanカテゴリをローカル検証委譲から除外し、result内にもauth理由がある実形の回帰を追加。Codex promptはpublic build assetのsandbox download制限をbuild委譲へ分類するよう明確化。CLIのminute-only resetを同じ分の秒が進んだだけで翌日扱いにしない修正と、過去/未来/明示timestampを保持する回帰を追加。既存source-manifestは取得時の証跡として保持。
 
 2026-10-05: ユーザー指定のlocal-automatic方針を追加。固定bridge/registry opt-inに限りコード差分レビューをDraftへ進め、disposable DBのpgTAP/isolation/型比較と固定desktop/mobile E2Eを親検証へ追加。既定manual、実credential/production/既存DB/merge境界を保持。runner中断cleanupと検証前後のdiff束縛も検証。固定Supabase config referenceは保存CareRecord main configから取り込み、seedをrunner内で無効化。
+2026-10-05、Issue #7: human grants を維持し、固定 binding の operational recovery descriptor と parent 検証を追加。verification failure の finite repair と永続 investigation、checks の exact profile、sandbox/credential 分離は維持。元source-manifestを改変せず、現artifactの合成回帰で検証。
+
+2026-10-05、Issue #8: manager が生成・保存した current review request の stable actor ID、Issue/diff binding を検証し、#5 private grants へ変換。新しい strict IPC は request Issue/diff binding と仕様本文更新後の一回限り再評価のみで、generic specification grant は追加しない。controller lock/revision、finite checks/repair、production/credential/sandbox/publication guards を維持。新 manager module github-review.ts も protected path に追加。
+2026-10-05、Issue #7 制約解消: 元の未commit local-automatic 実装から信頼済み opt-in policy と使い捨て DB/E2E runner の必要部分を確認して移植。元worktree は無変更。並列実行・credential probe・deployment gate解除・追加repair/timeout増加は移植せず、既定manual/#5・manager protected path・固定検証境界を維持。
+
+2026-10-05、Issue #8 制約解消: 信頼済みregistryの固定Markdown canonical sourceをGitHubのimmutable tree/blobへ束縛。取得/モード/hash/UTF-8/boundsを検証、本文不変でも新しいsource digestと新reactionで一回だけ再評価。#5 grantは拡張せず、private capabilityとworkerの独立再取得でstaleを拒否。

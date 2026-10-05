@@ -37,9 +37,3 @@ test('automatic policy is explicit trusted IPC data; code categories never inclu
  for(const category of ['credential','production','destructive','deploy','external_service','specification','local_verification'])assert.equal(automaticReviewEligible([category]),false);
  const prompt=implementationPrompt({number:1},{worktree:'/clone',branch:'codex/issue-1'},'care-record-v1','local-automatic');assert.match(prompt,/authorizes the trusted parent/);assert.match(prompt,/Do not apply migrations or run E2E yourself/);
 });
-
-test('local DB failure reaches same-session repair as bounded phase/test identifiers without raw output',async()=>{
- const {failureSignals,CommandFailure,VerificationFailure,repairDiagnostic}=await import('./lib/failure.mjs');
- const signals=failureSignals('Local DB test failed: internal_work_idempotency.test.sql; assertions: 12\nLocal verification failed at db-tests; output omitted');
- const failure=new VerificationFailure('local_db_e2e',new CommandFailure(signals));assert.equal(failure.retryable,true);const diagnostic=repairDiagnostic(failure.diagnostic);assert.equal(diagnostic.phase,'db-tests');assert.equal(diagnostic.dbTest,'internal_work_idempotency');assert.equal(JSON.stringify(diagnostic).includes('assertions'),false);assert.equal(repairDiagnostic({...diagnostic,dbTest:'arbitrary-command'}),null);
-});

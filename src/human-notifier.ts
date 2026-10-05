@@ -24,7 +24,8 @@ export class HumanNotifier {
    const waiting=[...(repo.humanWaiting??[]),...(repo.status==='needs-human'&&repo.current?[{job:repo.current,reason:repo.reason}]:[])];
    for(const entry of waiting){
     if(stopping())return results;
-    if(configured.reviewPolicy==='local-automatic'&&!['automatic_verification_failed','verification_retry_exhausted','unsafe_or_unavailable_verification','parent_verification_safety_failed'].includes(entry.reason)&&(automaticReviewEligible(entry.job.reasonCategories)||entry.job.localProbeEligible))continue;
+    if(!['automatic_verification_failed','verification_retry_exhausted','unsafe_or_unavailable_verification','parent_verification_safety_failed'].includes(entry.reason)&&configured.reviewPolicy==='local-automatic'&&(automaticReviewEligible(entry.job.reasonCategories)||entry.job.localProbeEligible))continue;
+    if((entry.job.recovery==='automatic_retry_pending'||entry.job.approvals?.some(item=>item.status==='automatic')&&entry.job.recovery!=='human_investigation_required')&&entry.job.reasonCategories.every(reason=>['sandbox_capability','local_verification','verification_retry_limit'].includes(reason)||entry.job.approvals?.some(item=>item.reason===reason&&['approved','automatic'].includes(item.status))))continue;
     try{
      const event:Attention=parseAttention({version:1,issue:entry.job.issue,reason:entry.reason==='automatic_verification_failed'?'verification_retry_exhausted':entry.reason,categories:entry.job.reasonCategories,check:entry.job.check==='local_db_e2e'?null:entry.job.check},repo.repo,this.login);
      const {marker}=attentionComment(event,repo.repo,this.login);const key=repo.id+marker;
