@@ -44,7 +44,7 @@ async function fixture(t,number=57){
  const approval={repositoryId:'test--repo',repo:'test/repo',grants:[],issue:async()=>issue};
  const approve=async(reasons)=>{for(const reason of reasons)approval.grants.push(parseGrant({repositoryId:'test--repo',repo:'test/repo',issue:number,reason,binding:reason==='manual_e2e'?issueBinding(issue):await diffBinding(current,execute),approvedAt:Date.now(),e2e:reason==='manual_e2e'?{specs:['auth'],projects:['chromium','mobile-chrome']}:null}));};
  const save=()=>saveJson(join(stateDir,'state.json'),state);
- const run=()=>worker({config:{...configuration({}),stateDir,repo:'test/repo'},root:clone,mode:'once',expectedIssue:number,continueAfterHuman:true,approval,execute,report:()=>{},run:()=>assert.fail('Publish-stage resume reran Codex')});
+ const run=(reviewPolicy='manual')=>worker({reviewPolicy,config:{...configuration({}),stateDir,repo:'test/repo'},root:clone,mode:'once',expectedIssue:number,continueAfterHuman:true,approval,execute,report:()=>{},run:()=>assert.fail('Publish-stage resume reran Codex')});
  const change=async(name,content='reviewed\n')=>{await mkdir(join(worktree,name,'..'),{recursive:true});await writeFile(join(worktree,name),content);};
  t.after(()=>rm(root,{recursive:true,force:true}));return {root,clone,stateDir,current,state,issue,approval,approve,save,run,change,calls,execute,git,worktree,base};
 }
@@ -52,7 +52,7 @@ async function fixture(t,number=57){
 test('CareRecord #57 auth guard stays closed without approval; exact reviewed diff resumes the same saved job',async t=>{
  const f=await fixture(t,57);await f.change('src/app/auth/page.tsx');
  await assert.rejects(verify(f.current,f.execute),error=>error.reasons.includes('auth'));
- f.current.humanReasons=['auth'];await f.approve(['auth']);await f.save();const state=await f.run();
+ f.current.humanReasons=['auth'];f.current.result.reasons=[{category:'auth',check:'none'}];await f.approve(['auth']);await f.save();const state=await f.run();
  assert.equal(state.status,'idle');assert.equal(state.current,null);assert.ok(f.calls.some(([binary,args])=>binary==='git'&&args[0]==='push'));
  assert.ok(f.calls.some(([binary,args])=>binary==='gh'&&args[0]==='pr'&&args.includes('--draft')));
  assert.ok(!f.calls.some(([binary,args])=>binary==='codex'&&args[0]==='exec'&&args.at(-1)==='-'));
@@ -137,4 +137,48 @@ test('E2E scope is enum-only and requires pinned local config; no lifecycle hook
  await writeFile(join(f.worktree,'playwright.config.ts'),'export default { retries: 99 }');await assert.rejects(assertE2ePlan(f.worktree,scripts,'care-record-v1',scope));
  const descriptor={version:1,profile:'care-record-v1',repo:'test/repo',clonePath:f.clone,stateDirectory:f.stateDir,expectedIssue:48,approval:{repositoryId:'test--repo',repo:'test/repo',grants:[]}};
  assert.equal(parseDispatchDescriptor(descriptor),descriptor);await f.approve(['manual_e2e']);assert.throws(()=>parseDispatchDescriptor({...descriptor,approval:{...descriptor.approval,grants:[{...f.approval.grants[0],issue:47}]}}));
+});
+
+test('managed publication recovery only clears a proven branch opt-out gate, never reruns Codex',async t=>{
+ const f=await fixture(t,74);
+ const original={git:{deploymentEnabled:{'codex/other':false}}};
+ await writeFile(join(f.clone,'vercel.json'),JSON.stringify(original));await f.git(['add','vercel.json']);await f.git(['commit','-m','synthetic unsuppressed base']);
+ const base=await f.git(['rev-parse','HEAD']);await f.git(['update-ref','refs/remotes/origin/main',base]);await f.git(['merge','--ff-only',base],f.current.worktree);f.current.base=base;
+ await f.change('example.txt','implementation\n');f.current.preflight={category:'deploy',reason:'branch_deployment_not_disabled'};f.state.lastReason='branch_deployment_not_disabled';await f.save();
+ const state=await f.run();assert.equal(state.status,'idle');assert.equal(state.current,null);
+ const config=JSON.parse(await readFile(join(f.current.worktree,'vercel.json'),'utf8'));assert.equal(config.git.deploymentEnabled[f.current.branch],false);assert.equal(config.git.deploymentEnabled['codex/other'],false);assert.equal(f.current.session,'saved-session');
+ assert.ok(f.calls.some(([binary,args])=>binary==='git'&&args[0]==='push'));
+});
+
+
+test('opt-in local automatic resumes saved auth changes without per-diff approvals and runs desktop/mobile E2E before Draft',async t=>{
+ const f=await fixture(t,57);await f.change('src/app/auth/page.tsx');f.current.humanReasons=['auth'];f.current.result.reasons=[{category:'auth',check:'none'}];await f.save();
+ const state=await f.run('local-automatic');assert.equal(state.status,'idle');assert.equal(state.current,null);
+ const validation=f.calls.find(([binary,args])=>binary==='node'&&args[0].endsWith('/e2e/run-local.mjs'));
+ assert.ok(validation);const scope=JSON.parse(validation[1][2]);assert.deepEqual(scope.projects,['chromium','mobile-chrome']);assert.ok(scope.specs.includes('auth')&&scope.specs.includes('recovery'));
+ assert.ok(f.calls.findIndex(([binary])=>binary==='node')<f.calls.findIndex(([binary,args])=>binary==='git'&&args[0]==='push'));
+ assert.ok(f.calls.some(([binary,args])=>binary==='gh'&&args.includes('--draft')));assert.equal(f.approval.grants.length,0);
+});
+test('automatic DB validation is mandatory before commit; failure retains job and cannot auto-resume',async t=>{
+ const f=await fixture(t,47);await f.change('supabase/migrations/20261004_test.sql','CREATE POLICY records ON records USING (tenant_id = 1);\n');f.current.humanReasons=['db','permission','tenant','security'];await f.save();
+ const execute=async(binary,args,options)=>{if(binary==='node'&&args[0].endsWith('/e2e/run-local.mjs')){assert.ok(args.includes('--db-tests'));throw new Error('DB assertion failed');}return f.execute(binary,args,options);};
+ const opts={config:{...configuration({}),stateDir:f.stateDir,repo:'test/repo'},root:f.clone,mode:'once',expectedIssue:47,continueAfterHuman:true,reviewPolicy:'local-automatic',execute,report:()=>{}};
+ const state=await worker(opts);assert.equal(state.status,'needs-human');assert.equal(state.lastReason,'automatic_verification_failed');assert.equal(state.current.session,'saved-session');assert.ok(!f.calls.some(([binary,args])=>binary==='git'&&args[0]==='push'));
+ const before=f.calls.filter(([binary])=>binary==='node').length;await worker(opts);assert.equal(f.calls.filter(([binary])=>binary==='node').length,before);
+});
+test('automatic policy never grants production, credential, destructive or unsupported local script gates',async t=>{
+ const f=await fixture(t);await f.change('example.txt');for(const category of ['production','credential','destructive','external_service','deploy','specification']){
+ f.current.result.reasons=[{category,check:'none'}];await assert.rejects(verify(f.current,f.execute,'care-record-v1',undefined,false,'local-automatic'),error=>error.reasons?.includes(category));}
+ f.current.result.reasons=[];await f.change('src/app/auth/page.tsx');await writeFile(join(f.worktree,'package.json'),JSON.stringify({scripts:{...scripts,'pretest:unit':'echo unsafe'}}));await assert.rejects(verify(f.current,f.execute,'care-record-v1',undefined,false,'local-automatic'));
+ assert.ok(!f.calls.some(([binary,args])=>binary==='git'&&args[0]==='push'));
+});
+
+
+test('legacy unit credential label is resolved only by successful isolated check, never an actual credential operation',async t=>{
+ const f=await fixture(t);await f.change('src/app/auth/page.tsx');f.current.humanReasons=['auth'];f.current.result.reasons=[{category:'auth',check:'none'},{category:'credential',check:'test:unit'}];await f.save();
+ const state=await f.run('local-automatic');assert.equal(state.status,'idle');assert.ok(f.calls.some(([binary,args,options])=>binary==='npm'&&args[1]==='test:unit'&&options.testMode));assert.ok(f.calls.some(([binary,args])=>binary==='git'&&args[0]==='push'));
+});
+test('automatic verification cannot overlook changed file contents with identical git status',async t=>{
+ const f=await fixture(t);await f.change('src/app/auth/page.tsx');const execute=async(binary,args,options)=>{if(binary==='node')await writeFile(join(f.worktree,'src/app/auth/page.tsx'),'altered by check\n');return f.execute(binary,args,options);};
+ await assert.rejects(verify(f.current,execute,'care-record-v1',undefined,false,'local-automatic'),error=>error.reason==='verification_changed_worktree');assert.equal(await f.git(['rev-parse','HEAD'],f.worktree),f.base);
 });

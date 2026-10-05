@@ -1,4 +1,4 @@
-import { open } from 'node:fs/promises';
+import { open, lstat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,7 @@ const pinned = {
 };
 export async function assertE2ePlan(root, scripts, profile, scope) {
   parseE2e(scope);
+  for(const name of ['.env','.env.local','.env.development','.env.development.local']){try{await lstat(join(root,name));throw new HumanApprovalError(['credential']);}catch(error){if(error.code!=='ENOENT')throw error;}}
   if (profile !== 'care-record-v1' || scripts?.dev !== 'next dev --webpack' || scripts.predev || scripts.postdev) throw new HumanApprovalError(['manual_e2e']);
   for (const [name, hash] of Object.entries(pinned)) {
     const file = await open(join(root, name), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -27,4 +28,9 @@ export async function runApprovedE2e(current, scripts, profile, scope, execute) 
   await assertE2ePlan(current.worktree, scripts, profile, scope);
   await execute('node', [fileURLToPath(new URL('../e2e/run-local.mjs', import.meta.url)), current.worktree, JSON.stringify(parseE2e(scope))],
     { cwd: current.worktree, timeout: 600_000, testMode: true });
+}
+
+export async function runAutomaticLocal(current,scripts,profile,scope,execute,{db=false}={}){
+ await assertE2ePlan(current.worktree,scripts,profile,scope);
+ await execute('node',[fileURLToPath(new URL('../e2e/run-local.mjs',import.meta.url)),current.worktree,JSON.stringify(parseE2e(scope)),...(db?['--db-tests']:[])],{cwd:current.worktree,timeout:1_800_000,testMode:true});
 }

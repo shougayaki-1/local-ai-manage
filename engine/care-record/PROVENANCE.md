@@ -13,3 +13,9 @@ lib/*.mjsはcodex-runner.mjsのspawn成功通知・profile別prompt、queue.mjs�
 2026-10-04、Issue #5の固定人間承認契約を追加。lib/human-approval.mjs、lib/approved-e2e.mjsとmanager所有private履歴で、repository/Issue/category/base/HEAD/content digest（manual_e2eはIssue本文digest）を束縛する。workerはguardを保持し、対応する明示承認がある場合だけ通過し、verify/E2E/commit/publish境界で再検証する。
 
 e2e/run-local.mjsとe2e/local-environment.mjsはユーザー所有CareRecordのscripts/e2e working-tree snapshot（2026-10-04）から取得。run-localはrepository rootをmanager固定argsから受け、enum spec/project・retry 0・skip/expected failure拒否・raw output省略へ適応したtrusted artifact。playwright.config.ts.referenceは同snapshotの検証fixtureで、SHA-256は0cfed6fa2a38ed34dc427f470ce8d5efb0782995ed31826ac871c3220e30fb64、local-environment.mjsはa44b17e1cd2ec92ef6b68f1b1a449d1833e03e4feb6d9ad179c8d682a52a66cd。実行時はこのconfig/guardのpinとexact dev scriptを確認し、未レビューのconfig変更は承認でも許可しない。source-manifest.jsonの元worker取得記録は変更しない。
+
+2026-10-04、managed parentに当該codex branchのVercel抑止準備を追加。saved baseと同じ設定に対するそのbranchのfalse追加だけを許可する。ブランチ抑止だけで止まったcompleted/publish作業は、fresh Issue/依存/PR/worktreeを再検証して同じ保存作業を再開する。他のdeploy/production/credential理由は解除しない。standalone/default verifyの既存fail-closed動作は保持。
+
+2026-10-04、scope承認済みhumanカテゴリをローカル検証委譲から除外し、result内にもauth理由がある実形の回帰を追加。Codex promptはpublic build assetのsandbox download制限をbuild委譲へ分類するよう明確化。CLIのminute-only resetを同じ分の秒が進んだだけで翌日扱いにしない修正と、過去/未来/明示timestampを保持する回帰を追加。既存source-manifestは取得時の証跡として保持。
+
+2026-10-05: ユーザー指定のlocal-automatic方針を追加。固定bridge/registry opt-inに限りコード差分レビューをDraftへ進め、disposable DBのpgTAP/isolation/型比較と固定desktop/mobile E2Eを親検証へ追加。既定manual、実credential/production/既存DB/merge境界を保持。runner中断cleanupと検証前後のdiff束縛も検証。固定Supabase config referenceは保存CareRecord main configから取り込み、seedをrunner内で無効化。

@@ -10,6 +10,8 @@ function validCurrent(current) {
     && typeof current.worktree === 'string' && Number.isInteger(current.failures) && current.failures >= 0
     && Number.isInteger(current.quotaWaits) && current.quotaWaits >= 0 && ['prepare', 'implement', 'publish'].includes(current.stage)
     && (current.repair === undefined || repairDiagnostic(current.repair))
+    && (current.alternativeHistory === undefined || (Array.isArray(current.alternativeHistory)
+      && current.alternativeHistory.length <= 2 && current.alternativeHistory.every(entry => repairDiagnostic(entry))))
     && (current.verificationChecks === undefined || (Array.isArray(current.verificationChecks)
       && current.verificationChecks.every(name => localChecks.includes(name))));
 }

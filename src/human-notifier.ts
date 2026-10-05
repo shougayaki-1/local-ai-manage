@@ -1,3 +1,4 @@
+import { automaticReviewEligible } from './approval-policy.ts';
 import { execFile } from 'node:child_process';
 import { homedir } from 'node:os';
 import { githubEnvironment } from './github-queue.ts';
@@ -23,8 +24,9 @@ export class HumanNotifier {
    const waiting=[...(repo.humanWaiting??[]),...(repo.status==='needs-human'&&repo.current?[{job:repo.current,reason:repo.reason}]:[])];
    for(const entry of waiting){
     if(stopping())return results;
+    if(configured.reviewPolicy==='local-automatic'&&!['automatic_verification_failed','verification_retry_exhausted','unsafe_or_unavailable_verification','parent_verification_safety_failed'].includes(entry.reason)&&(automaticReviewEligible(entry.job.reasonCategories)||entry.job.localProbeEligible))continue;
     try{
-     const event:Attention=parseAttention({version:1,issue:entry.job.issue,reason:entry.reason,categories:entry.job.reasonCategories,check:entry.job.check},repo.repo,this.login);
+     const event:Attention=parseAttention({version:1,issue:entry.job.issue,reason:entry.reason==='automatic_verification_failed'?'verification_retry_exhausted':entry.reason,categories:entry.job.reasonCategories,check:entry.job.check==='local_db_e2e'?null:entry.job.check},repo.repo,this.login);
      const {marker}=attentionComment(event,repo.repo,this.login);const key=repo.id+marker;
      const at=this.last.get(key);if(at!==undefined&&now-at<300_000)continue;
      // Back off failures too; each later Actions run checks GitHub for an existing bot comment.

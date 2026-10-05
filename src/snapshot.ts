@@ -1,3 +1,4 @@
+import { localProbeEligible } from './approval-policy.ts';
 import { open, realpath, opendir } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join } from 'node:path';
@@ -8,8 +9,8 @@ import type { Job, Repository, RepoSnapshot, Registry, Snapshot } from './types.
 const statuses=['idle','running','quota-wait','needs-human','failed'];
 const stages=['prepare','implement','publish'];
 const categories=['sandbox_capability','local_verification','db','auth','permission','tenant','production','deploy','credential','external_service','destructive','security','retention','specification','manual_e2e','worktree_safety'];
-const reasons=['running','completed','stopped','paused','needs_human','quota_wait','manual_e2e_required','human_approval_required','parent_verification_retry','verification_retry_exhausted','unsafe_or_unavailable_verification','parent_verification_safety_failed','publication_failed','operational_error','stale_existing_worktree','worktree_base_mismatch','branch_deployment_not_disabled','worktree_branch_mismatch','missing_saved_worktree','repair_session_resume_unavailable','repair_session_mismatch'];
-const checks=['typecheck','lint','test','test:unit','test:ui','build','test:codex-worker','test:ci-scope','diff-check'];
+const reasons=['automatic_verification_failed','running','completed','stopped','paused','needs_human','quota_wait','manual_e2e_required','human_approval_required','parent_verification_retry','verification_retry_exhausted','unsafe_or_unavailable_verification','parent_verification_safety_failed','publication_failed','operational_error','stale_existing_worktree','worktree_base_mismatch','branch_deployment_not_disabled','worktree_branch_mismatch','missing_saved_worktree','repair_session_resume_unavailable','repair_session_mismatch'];
+const checks=['local_db_e2e','typecheck','lint','test','test:unit','test:ui','build','test:codex-worker','test:ci-scope','diff-check'];
 const count=(v: unknown): number|null => Number.isSafeInteger(v) && (v as number)>=0 ? v as number : null;
 const issue=(v: unknown): v is number => Number.isSafeInteger(v) && (v as number)>0;
 const date=(v: unknown): string|null => typeof v==='number' && Number.isFinite(v) && v>=0 && v<=8.64e15 ? new Date(v).toISOString() : null;
@@ -26,7 +27,7 @@ export function projectJob(value: unknown, repo: string): Job|null {
   const supplied=Array.isArray(result.reasons) ? result.reasons : [];
   const all=[...supplied,repair,preflight,...(Array.isArray(value.humanReasons)?value.humanReasons.map(category=>({category})):[])].filter(record).map(v=>v.category).filter((v): v is string => typeof v==='string' && categories.includes(v));
   const check=[repair.check,...supplied.filter(record).map(reason=>reason.check)].find(value=>checks.includes(String(value)));
-  return {issue:value.number,stage:stages.includes(String(value.stage)) ? value.stage as Job['stage'] : 'unknown',failures:count(value.failures),quotaWaits:count(value.quotaWaits),model:null,effort:null,reasonCategories:[...new Set(all)],check:check===undefined?null:String(check),prUrl:prUrl(value.pr,repo)};
+  return {localProbeEligible:localProbeEligible(value),issue:value.number,stage:stages.includes(String(value.stage)) ? value.stage as Job['stage'] : 'unknown',failures:count(value.failures),quotaWaits:count(value.quotaWaits),model:null,effort:null,reasonCategories:[...new Set(all)],check:check===undefined?null:String(check),prUrl:prUrl(value.pr,repo)};
 }
 export function projectState(raw: unknown, repo: Repository, updatedAt: number, now: number): RepoSnapshot {
   if (!record(raw) || raw.version!==1 || raw.repo?.toString().toLowerCase()!==repo.repo.toLowerCase() || !statuses.includes(String(raw.status)) || typeof raw.paused!=='boolean' || (raw.current!==null && (!record(raw.current) || !issue(raw.current.number) || !stages.includes(String(raw.current.stage))))) throw new Error('invalid_state');
@@ -40,7 +41,7 @@ export function projectState(raw: unknown, repo: Repository, updatedAt: number, 
       humanWaiting.push({job,reason:reasons.includes(String(entry.reason))?String(entry.reason):'unknown',since});
     }
   }
-  return {id:repo.id,repo:repo.repo,enabled:repo.enabled,ownership:'observe-only',status:String(raw.status),paused:raw.paused,current:projectJob(raw.current,repo.repo),humanWaiting,defaultModel:repo.defaultModel,defaultEffort:repo.defaultEffort,quota:{status:raw.status==='quota-wait' ? 'waiting' : 'unknown',nextRetryAt:date(raw.nextRetryAt),startedAt:date(raw.quotaWaitStarted)},stateUpdatedAt:date(updatedAt),heartbeat:null,logs:{status:'unavailable',events:[]},freshness:now-updatedAt>300_000 ? 'stale' : 'observed',reason:reasons.includes(String(raw.lastReason)) ? String(raw.lastReason) : 'unknown',runs:[]};
+  return {id:repo.id,repo:repo.repo,enabled:repo.enabled,ownership:'observe-only',status:String(raw.status),paused:raw.paused,current:projectJob(raw.current,repo.repo),humanWaiting,reviewPolicy:repo.reviewPolicy??'manual',defaultModel:repo.defaultModel,defaultEffort:repo.defaultEffort,quota:{status:raw.status==='quota-wait' ? 'waiting' : 'unknown',nextRetryAt:date(raw.nextRetryAt),startedAt:date(raw.quotaWaitStarted)},stateUpdatedAt:date(updatedAt),heartbeat:null,logs:{status:'unavailable',events:[]},freshness:now-updatedAt>300_000 ? 'stale' : 'observed',reason:reasons.includes(String(raw.lastReason)) ? String(raw.lastReason) : 'unknown',runs:[]};
 }
 export async function readPrivateJson(path: string): Promise<{value: unknown; modified: number}> {
   const file=await open(path,constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -78,13 +79,13 @@ export async function observeRepository(repo: Repository, now: number): Promise<
     }
     return snapshot;
   } catch {
-    return {id:repo.id,repo:repo.repo,enabled:repo.enabled,ownership:'observe-only',status:'unavailable',paused:null,current:null,defaultModel:repo.defaultModel,defaultEffort:repo.defaultEffort,quota:{status:'unknown',nextRetryAt:null,startedAt:null},stateUpdatedAt:null,heartbeat:null,logs:{status:'unavailable',events:[]},freshness:'unavailable',reason:'status_unavailable',runs:[]};
+    return {id:repo.id,repo:repo.repo,enabled:repo.enabled,ownership:'observe-only',status:'unavailable',paused:null,current:null,reviewPolicy:repo.reviewPolicy??'manual',defaultModel:repo.defaultModel,defaultEffort:repo.defaultEffort,quota:{status:'unknown',nextRetryAt:null,startedAt:null},stateUpdatedAt:null,heartbeat:null,logs:{status:'unavailable',events:[]},freshness:'unavailable',reason:'status_unavailable',runs:[]};
   }
 }
 export async function collectSnapshot(registry: Registry, now=Date.now(), supervisorDirectory?:string): Promise<Snapshot> {
   const repositories=await Promise.all(registry.repositories.map(repo=>observeRepository(repo,now)));
   if(supervisorDirectory)try{projectSupervisorHeartbeat((await readPrivateJson(join(supervisorDirectory,'supervisor-heartbeat.json'))).value,registry,repositories,now);}catch{/* Missing runtime observation remains unknown. */}
-  return {schemaVersion:1,generatedAt:new Date(now).toISOString(),mode:'observe-only',controller:{status:'observing',globalConcurrency:1,execution:'not-managed'},repositories,queue:{status:'unavailable',reason:'github_adapter_not_connected',repositories:[],items:[]}};
+  return {schemaVersion:1,generatedAt:new Date(now).toISOString(),mode:'observe-only',controller:{status:'observing',globalConcurrency:registry.globalConcurrency,execution:'not-managed'},repositories,queue:{status:'unavailable',reason:'github_adapter_not_connected',repositories:[],items:[]}};
 }
 export function demoSnapshot(now=Date.now()): Snapshot {
   const repo: Repository={id:'example--care-record',repo:'example/care-record',clonePath:'/unused',stateDirectory:'/unused',enabled:false,ownership:'observe-only',defaultModel:'gpt-6.1-sol',defaultEffort:'medium',maximumConcurrency:1};

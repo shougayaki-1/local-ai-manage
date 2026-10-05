@@ -30,3 +30,25 @@ export async function readSuppressedDeployment(root,branch) {
  catch { throw new PublicationSafetyError(); }
  finally { await file?.close(); }
 }
+
+// Managed publication may prepare precisely one branch's opt-out, never enable
+// deployments or rewrite security settings. Only an unchanged saved-base config
+// can be amended; an agent-edited config still requires human reconciliation.
+export async function prepareSuppressedDeployment(root,branch,before) {
+ if(!/^codex\/[A-Za-z0-9._/-]+$/.test(branch)||branch.includes('..'))throw new PublicationSafetyError();
+ let file;
+ try {
+  file=await open(join(root,'vercel.json'),constants.O_RDWR|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+  const info=await file.stat();if(!info.isFile()||info.nlink!==1||info.size>65536)throw new PublicationSafetyError();
+  const buffer=Buffer.alloc(65537);const {bytesRead}=await file.read(buffer,0,buffer.length,0);if(bytesRead>65536)throw new PublicationSafetyError();
+  const config=JSON.parse(buffer.subarray(0,bytesRead).toString());
+  if(deploymentDisabled(config,branch))return config;
+  if(JSON.stringify(config)!==JSON.stringify(before)||!config||typeof config!=='object'||Array.isArray(config))throw new PublicationSafetyError();
+  const after=structuredClone(config);after.git??={};after.git.deploymentEnabled??={};
+  if(!after.git.deploymentEnabled||typeof after.git.deploymentEnabled!=='object'||Array.isArray(after.git.deploymentEnabled))throw new PublicationSafetyError();
+  after.git.deploymentEnabled[branch]=false;
+  if(!branchSuppressionOnly(before,after,branch)||!deploymentDisabled(after,branch))throw new PublicationSafetyError();
+  const bytes=Buffer.from(JSON.stringify(after,null,2)+'\n');if(bytes.length>65536)throw new PublicationSafetyError();
+  await file.write(bytes,0,bytes.length,0);await file.truncate(bytes.length);await file.sync();return after;
+ }catch{throw new PublicationSafetyError();}finally{await file?.close();}
+}

@@ -1,6 +1,6 @@
 # 停止したIssueの人間承認
 
-Issue #5 の固定承認契約です。管理画面の「確認が必要」に、保留中の作業も含めて `Pending human reason` と `Approval: missing | approved | stale` を表示します。
+既定のmanual方針はIssue #5 の固定承認契約です。管理画面の「確認が必要」に、保留中の作業も含めて `Pending human reason` と `Approval: missing | approved | stale` を表示します。
 
 管理者はGitHubのIssue要件と専用worktreeの差分を別途レビューし、確認したカテゴリの「確認済み範囲を承認」を押します。差分・本文・絶対path・session・raw errorは管理画面へ出しません。承認を保存しても全体／repositoryのPause・Disableは解除しません。managed実行の設定が有効なら、schedulerが同じ保存作業を再選択します。別のcurrentがあるときはそちらを保持し、保留作業の再開はcurrent終了後です。
 
@@ -50,3 +50,20 @@ spec allowlistはauth、workspace-routing、staff-features、tenant-isolation、
 対象specとprojectの固定args、`--retries=0 --forbid-only --reporter=json` を構築します。検証結果にskip、retry、expected failure、失敗、ゼロ件があれば成功扱いにしません。既存timeoutを増やしません。Issue本文から実行コマンドを抽出しません。E2E承認はDB/RLS/auth等の差分承認を兼ねません。
 
 本実装の検証は合成Issue・一時Git・モックE2E計画・loopback HTTPを使用し、実E2E、production、GitHubの実変更、稼働中workerの再開は行いません。
+
+
+## ローカル検証の自動化（2026-10-05）
+
+通常の有限repairで検証が通らない場合、local-automaticでは同じsession/worktree/baseを保って別の実装方法を最大2回試す。失敗回数と構造化された履歴を保存し、quota待ちや再起動で上限をリセットしない。Issueの受入条件・安全性・必須検証は維持し、検証を省くための実装変更は許さない。DB起動・migration適用の失敗、実credentialや本番操作のゲートはこの切替対象外。既に保留した作業の承認状態はこの変更だけでは解除しない。
+
+registryのrepositoryに `"reviewPolicy": "local-automatic"` を指定すると、CareRecord profileはDB/auth/permission/tenant/security/retentionのコード差分レビューをDraft PRへ進める。E2E必須Issueも実装前には停止しない。省略またはmanualは従来どおり。Issue本文・ラベルから設定できず、registry fingerprintと固定bridge IPCへ束縛する。manager自身のcontroller/engineの保護は従来どおり。
+
+親はtypecheck/lint/unit/UI/buildと、固定allowlist全E2E specをchromium・mobile-chrome、retry=0で検証する。必要なDB差分は新規project ID・空きportの一時Supabase環境だけにmigrationを適用し、`.test.sql`のpgTAP、存在するisolation spec、public schemaの型生成と `src/types/database.generated.ts` の一致を確認する。既存DB・linked projectは利用しない。固定artifactのSupabase configを使用しseedは無効、実credentialを継承せず、loopback endpointとlocal生成キーだけを使用する。実credentialを含み得るNext.js環境ファイル、変更されたE2E config/環境guard、script hooksは拒否する。
+
+実装agent自身にはDB適用/E2E実行を許可せず、親への構造化委譲を要求する。検証前後・親commit後・publish前の差分digestを照合する。失敗は同じsessionで有限repair後に `automatic_verification_failed` として保存し、同じ保留作業を無限に再選択しない。未実行・skip・retry・型不一致を成功には扱わず、必要な検証が通った時だけpush/Draft PRを作成する。停止したcurrentを保持しても、別の自動検証対象humanWaitingを先に再開できる。
+
+本番操作・実credential・external service・破壊的操作・仕様判断・worktree安全性は自動化対象外。マージは引き続き人が行う。使い捨てstackは通常終了・検証失敗・中断時に、自分のprojectだけを `stop --no-backup` する。片付け失敗時には設定を保持して成功扱いにしない。管理画面は自動対象をApproval: automaticと表示し、人間承認が済んだとは表示しない。
+
+旧workerがunitの合成設定をcredential、公開build asset取得をexternal_serviceと報告した場合は、当該固定scriptをcredential分離環境で実際に成功させた場合だけ、その検証項目の停止理由を解消する。失敗・差分変更・環境ファイル存在・他のcredential/external理由は解除しない。
+
+停止時は新規dispatchを止め、GitHub観測をキャンセルしてからscheduler drainを待つ。自動対象のカテゴリだけで待っている間は、人への確認通知を送らない。実検証の有限repair失敗は通知対象として残る。

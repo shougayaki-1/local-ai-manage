@@ -1,3 +1,4 @@
+import { drainDispatch } from './lifecycle.ts';
 import { HumanNotifier } from './human-notifier.ts';
 import { Approvals } from './approvals.ts';
 import { startSupervisorHeartbeat } from './supervisor-heartbeat.ts';
@@ -117,7 +118,7 @@ async function main() {
     console.log(`One-time login link (expires in 2 minutes): ${dashboard.launchUrl}`);
   }
   let stopping=false;
-  const stop=()=>{if(stopping)return;stopping=true;console.log('Stopping new dispatch; waiting for the current job to finish.');void (scheduler?scheduler.close():Promise.resolve()).then(()=>{observer?.close();return dashboard.close();}).then(()=>supervisor?.close()).then(()=>socket?.close()).then(()=>controller?.close()).then(()=>process.exit(0)).catch(()=>{console.error('Shutdown incomplete; retained state requires review.');process.exitCode=1;});};
+  const stop=()=>{if(stopping)return;stopping=true;console.log('Stopping new dispatch; waiting for the current job to finish.');const drained=drainDispatch(scheduler,observer??undefined);void drained.then(()=>dashboard.close()).then(()=>supervisor?.close()).then(()=>socket?.close()).then(()=>controller?.close()).then(()=>process.exit(0)).catch(()=>{console.error('Shutdown incomplete; retained state requires review.');process.exitCode=1;});};
   process.on('SIGINT',stop); process.on('SIGTERM',stop);
 }
 main().catch(error=>{if(process.argv.some(arg=>['--recovery-plan','--reconcile','--recovery-resume-plan','--resume-recovery'].includes(arg))){console.error('Recovery did not complete. Check the private attestation, unchanged plan, worker locks and recovery markers. Retained evidence requires review; no worker state or lock is cleared automatically.');process.exitCode=1;return;}void error;console.error('Startup failed. Check registry paths, origin, build and CLI flags. Legacy worker state was not changed.');process.exitCode=1;});

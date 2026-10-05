@@ -15,7 +15,7 @@ const state=()=>({version:1,repo:repo.repo,status:'needs-human',paused:true,curr
 async function fixture(t:test.TestContext) { const root=await realpath(await mkdtemp(join(tmpdir(),'local-ai-manage-test-')));t.after(()=>rm(root,{recursive:true,force:true}));return root; }
 test('registry rejects secrets, duplicate identities, arbitrary execution and parallelism',()=>{
  assert.equal(parseRegistry(registry()).repositories.length,1);
- for (const value of [{...registry(),secret:'key'},{...registry(),globalConcurrency:2},{...registry(),repositories:[repo,repo]},{...registry(),repositories:[{...repo,shell:'id'}]},{...registry(),repositories:[{...repo,ownership:'managed'}]},{...registry(),repositories:[{...repo,stateDirectory:'../escape'}]},{...registry(),repositories:[{...repo,maximumConcurrency:2}]}]) assert.throws(()=>parseRegistry(value));
+ for (const value of [{...registry(),secret:'key'},{...registry(),globalConcurrency:33},{...registry(),repositories:[repo,repo]},{...registry(),repositories:[{...repo,shell:'id'}]},{...registry(),repositories:[{...repo,ownership:'managed'}]},{...registry(),repositories:[{...repo,stateDirectory:'../escape'}]},{...registry(),repositories:[{...repo,maximumConcurrency:2}]}]) assert.throws(()=>parseRegistry(value));
 });
 test('projection excludes all private/free-text fields and validates PR boundary',()=>{
  const raw=state(); const publicState=projectState(raw,repo,1000,1100);

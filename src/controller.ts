@@ -25,6 +25,7 @@ export class Controller {
   private state:ControllerState;
   private directory:string;
   private ids:string[];
+  private concurrency=1;
   private lane:Promise<void>=Promise.resolve();
   private closed=false;
   private writable=true;
@@ -78,7 +79,7 @@ export class Controller {
         state=initialControllerState(registry);
       }
       const controller=new Controller(state,root,ids,lock);
-      await controller.persist(state);return controller;
+      controller.concurrency=registry.globalConcurrency;await controller.persist(state);return controller;
     } catch(error) {await lock.close();await unlink(join(root,'controller.lock'));throw error;}
   }
   private async persist(state:ControllerState):Promise<void> {
@@ -95,12 +96,19 @@ export class Controller {
     const pending=this.lane.then(()=>{if(this.closed||!this.writable)throw new ControlError('controller_unavailable',503);return work(this.view());});
     this.lane=pending.then(()=>{},()=>{});return pending;
   }
-  preferences():ControllerView {return {status:this.state.paused?'paused':'observing',globalConcurrency:1,execution:'not-managed',revision:this.state.revision,paused:this.state.paused,controls:'dispatch-intent',repositories:Object.entries(this.state.repositories).map(([id,value])=>({id,...value}))};}
+  preferences():ControllerView {return {status:this.state.paused?'paused':'observing',globalConcurrency:this.concurrency,execution:'not-managed',revision:this.state.revision,paused:this.state.paused,controls:'dispatch-intent',repositories:Object.entries(this.state.repositories).map(([id,value])=>({id,...value}))};}
   view():ControllerView {
     const scheduler=this.runtime?.view();
-    return {status:!this.writable?'blocked':scheduler?.status??(this.state.paused?'paused':'observing'),globalConcurrency:1,execution:scheduler?'managed':'not-managed',...(scheduler?{scheduler}:{}),revision:this.state.revision,paused:this.state.paused,controls:'dispatch-intent',repositories:Object.entries(this.state.repositories).map(([id,value])=>({id,...value}))};
+    return {status:!this.writable?'blocked':scheduler?.status??(this.state.paused?'paused':'observing'),globalConcurrency:this.concurrency,execution:scheduler?'managed':'not-managed',...(scheduler?{scheduler}:{}),revision:this.state.revision,paused:this.state.paused,controls:'dispatch-intent',repositories:Object.entries(this.state.repositories).map(([id,value])=>({id,...value}))};
   }
-  project(snapshot:Snapshot):Snapshot {const view=this.view();return {...snapshot,mode:view.execution==='managed'?'managed':snapshot.mode,controller:view,repositories:snapshot.repositories.map(repo=>({...repo,ownership:view.scheduler?.managedRepositoryIds.includes(repo.id)?'managed':repo.ownership}))};}
+  project(snapshot:Snapshot):Snapshot {
+    const view=this.view();
+    const projectItem=(item:Snapshot['queue']['items'][number])=>{
+      const repo=snapshot.repositories.find(repo=>repo.id===item.repositoryId);
+      return repo?.humanWaiting?.some(entry=>entry.job.issue===item.issue)||(repo?.status==='needs-human'&&repo.current?.issue===item.issue)?{...item,status:'needs-human' as const,reason:'needs_human_label' as const}:item;
+    };
+    return {...snapshot,mode:view.execution==='managed'?'managed':snapshot.mode,controller:view,repositories:snapshot.repositories.map(repo=>({...repo,ownership:view.scheduler?.managedRepositoryIds.includes(repo.id)?'managed':repo.ownership})),queue:{...snapshot.queue,items:snapshot.queue.items.map(projectItem),repositories:snapshot.queue.repositories.map(repo=>({...repo,items:repo.items.map(projectItem)}))}};
+  }
   apply(value:unknown):Promise<ControlAck> {
     const command=parseControl(value,this.ids);
     const work=this.lane.then(async()=>{

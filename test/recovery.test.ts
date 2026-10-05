@@ -136,3 +136,10 @@ test('a second rotation before scheduler startup retains inherited quota floors'
  const f=await fixture(t);const deadline=Date.now()+1_800_000;await writeFile(join(f.source,'scheduler.json'),JSON.stringify({version:1,topology:registryFingerprint(f.registry),phase:'blocked',reason:'shared_quota_wait',nextRetryAt:deadline}),{mode:0o600});await writeFile(join(f.worker,'state.json'),JSON.stringify({version:1,repo:'test/repo',status:'idle',paused:false,current:null,lastReason:'completed',nextRetryAt:null,quotaWaitStarted:null}),{mode:0o600});await approve(f);await reconcileOffline(f);
  const second={...f,source:f.replacement,replacement:join(f.root,'second-replacement')};assert.equal((await recoveryPlan(second.registry,second.source,second.replacement)).nextRetryAt,new Date(deadline).toISOString());await approve(second);await reconcileOffline(second);assert.equal(JSON.parse(await readFile(join(second.replacement,'recovery-quota.json'),'utf8')).nextRetryAt,deadline);
 });
+
+test('parallel journals and admission evidence bind recovery and retain shared quota',async t=>{
+ const f=await fixture(t);const deadline=Date.now()+3600000;const path=join(f.source,'dispatch.test--repo.json');
+ await writeFile(path,JSON.stringify({version:1,status:'settled',repositoryId:'test--repo',issue:40,reservationId:randomUUID(),outcome:{version:1,issue:40,status:'quota-wait',paused:false,currentIssue:40,nextRetryAt:deadline}}),{mode:0o600});
+ await writeFile(join(f.source,'dispatch-admission.lock'),'admission',{mode:0o600});const first=await recoveryPlan(f.registry,f.source,f.replacement);assert.equal(first.nextRetryAt,new Date(deadline).toISOString());assert.equal(first.dispatchLock,true);
+ await writeFile(path,JSON.stringify({version:1,status:'reserved',repositoryId:'test--repo',issue:40,reservationId:randomUUID(),outcome:null}),{mode:0o600});assert.notEqual((await recoveryPlan(f.registry,f.source,f.replacement)).planFingerprint,first.planFingerprint);
+});

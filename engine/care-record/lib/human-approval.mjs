@@ -144,3 +144,15 @@ export async function protectedReasons(current, execute, profile) {
   }
   return guardReasons(changed, profile, patch);
 }
+
+// Opt-in controller policy: code review is deferred to the Draft PR. Actual
+// production, credential, destructive and sandbox/worktree gates stay closed.
+export const automaticReviewReasons=Object.freeze(['db','auth','permission','tenant','security','retention','manual_e2e','sandbox_capability']);
+export function automaticReviewEligible(reasons){return Array.isArray(reasons)&&reasons.length>0&&reasons.every(reason=>automaticReviewReasons.includes(reason));}
+
+// Legacy workers mislabeled synthetic unit configuration/public asset downloads.
+// Eligibility only permits an isolated probe, never grants an external operation.
+export function localProbeEligible(current){
+ const reasons=pendingReasons(current);const probes=(current?.result?.reasons??[]).filter(reason=>reason.category==='credential'&&reason.check==='test:unit'||reason.category==='external_service'&&reason.check==='build');
+ return probes.length>0&&reasons.every(reason=>automaticReviewReasons.includes(reason)||probes.some(item=>item.category===reason))&&(current.result.reasons??[]).every(reason=>automaticReviewReasons.includes(reason.category)||probes.includes(reason));
+}
